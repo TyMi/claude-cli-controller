@@ -1,5 +1,7 @@
 # claude-cli-controller
 
+[![Built with AI](https://img.shields.io/badge/Built_with-AI-success)](https://shields.io)
+
 Startet, überwacht und verwaltet mehrere Claude Code CLI Sessions zentral in
 einem LXC-Container. Jede Session läuft als detached `tmux`-Session; ein
 systemd-Service startet beim Boot des Containers alle konfigurierten
