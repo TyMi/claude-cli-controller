@@ -1,0 +1,14 @@
+config/sessions.conf
+*.log
+
+# Lokaler Claude-Code-Session-Zustand (Resume-Checkpoints etc.), nicht für
+# das Repo gedacht.
+.claude/
+
+# Enthält reale Infrastrukturdetails (IPs, SSH-Aliase, Accounts) und ist
+# bewusst nicht fuer das (potenziell oeffentliche) Repo gedacht.
+CLAUDE.md
+
+# RAM-Monitoring: bewusst nicht versioniert (lokales Debug-Tooling).
+bin/ram-monitor.sh
+systemd/claude-ram-monitor.service

@@ -1,0 +1,23 @@
+[Unit]
+Description=Claude Code CLI Controller (tmux sessions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Platzhalter <user> und der Installationspfad müssen vor dem Einrichten
+# durch die tatsächlichen Werte ersetzt werden (siehe docs/SETUP.md).
+Type=simple
+User=<user>
+Group=<user>
+Environment=HOME=/home/<user>
+Environment=PATH=/home/<user>/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/home/<user>/claude-cli-controller
+ExecStart=/home/<user>/claude-cli-controller/controller.sh supervise
+ExecStop=/home/<user>/claude-cli-controller/controller.sh stop
+Restart=on-failure
+RestartSec=5
+KillMode=process
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

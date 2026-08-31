@@ -1,0 +1,22 @@
+# claude-cli-controller: Session-Definitionen
+#
+# Format (Semikolon-getrennt, kein Semikolon in den Feldern selbst):
+#   name;workdir;resume;extra_args;status
+#
+# name        eindeutiger tmux-Session-Name
+# workdir     Arbeitsverzeichnis für "claude" (leer = $HOME)
+# resume      leer = neue Session
+#             "last" / "continue" = --continue (letzte Session im workdir fortsetzen)
+#             <session-id> = --resume <session-id>
+# extra_args  zusätzliche CLI-Flags, z.B. --permission-mode acceptEdits
+# status      "active" (Standard, leer = active) oder "archived"
+#             (archivierte Sessions werden bei start/supervise übersprungen)
+#
+# Diese Datei normalerweise nicht von Hand pflegen, sondern über
+# ./controller.sh new / archive / unarchive verwalten.
+#
+# Zeilen mit "#" oder leere Zeilen werden ignoriert.
+
+main;/home/<user>/projects/project-a;;;active
+support;/home/<user>/projects/project-b;last;--permission-mode acceptEdits;active
+sandbox;/home/<user>/projects/scratch;;;active
