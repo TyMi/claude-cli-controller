@@ -109,7 +109,14 @@ name;workdir;resume;extra_args;status
 | `extra_args` | Zusätzliche CLI-Flags, z.B. `--permission-mode acceptEdits`                |
 | `status`     | `active` (Standard, leer = active) oder `archived`                        |
 
-Kommentarzeilen beginnen mit `#`, leere Zeilen werden ignoriert.
+Kommentarzeilen beginnen mit `#`, leere Zeilen werden ignoriert. Kein
+Semikolon in den Feldern selbst (zerschießt die Feld-Ausrichtung).
+
+**Sicherheitshinweis:** `resume` und `extra_args` landen unquotiert in dem
+Kommandostring, den `tmux new-session` als Shell-Befehl ausführt (nur
+`name` wird intern sauber gequotet). Diese Felder sind also effektiv
+Shell-Code — dort gehören nur vertrauenswürdige, selbst gepflegte Werte
+hinein, keine Eingaben aus nicht vertrauenswürdigen Quellen.
 
 ## Sessions bedienen
 

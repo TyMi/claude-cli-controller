@@ -23,7 +23,15 @@ tmux_() { tmux -S "$TMUX_SOCK" "$@"; }
 
 log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2"; }
 
-trim() { echo "$1" | xargs; }
+# Reines Bash-Trimming (kein "echo | xargs"): xargs interpretiert
+# Anführungszeichen selbst und bricht bei Werten wie "O'Briens-Projekt"
+# mit "unmatched quote" ab, was unter set -e das ganze Skript beendet.
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
 
 ensure_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -64,7 +72,11 @@ each_session() {
         extra="$(trim "${extra:-}")"
         status="$(trim "${status:-}")"
         [[ -z "$status" ]] && status="active"
-        "$callback" "$name" "$workdir" "$resume" "$extra" "$status"
+        # "|| true": ein Fehler in einer einzelnen Session (z.B. fehlendes
+        # workdir in start_one) darf unter set -e nicht die Verarbeitung
+        # aller weiteren Sessions abbrechen. start_one loggt den Fehler
+        # bereits selbst, bevor es return 1 liefert.
+        "$callback" "$name" "$workdir" "$resume" "$extra" "$status" || true
     done < "$CONFIG_FILE"
 }
 
