@@ -4,8 +4,11 @@
 
 ```bash
 sudo apt update
-sudo apt install -y tmux
+sudo apt install -y tmux python3
 ```
+
+`python3` wird von `trust_project_dir` (Auto-Trust für neu angelegte
+Projekte, siehe `docs/SESSIONS.md`) benötigt, nicht nur `tmux`.
 
 Claude Code CLI muss für den Benutzer installiert und **eingeloggt** sein,
 unter dem der Service läuft (im Folgenden `<user>` genannt — ersetze das
