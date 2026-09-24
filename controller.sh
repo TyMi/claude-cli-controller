@@ -17,7 +17,13 @@ CLAUDE_JSON="${CLAUDE_CTRL_CLAUDE_JSON:-$HOME/.claude.json}"
 AUTO_TRUST="${CLAUDE_CTRL_AUTO_TRUST:-1}"
 REMOTE_CONTROL="${CLAUDE_CTRL_REMOTE_CONTROL:-1}"
 
-mkdir -p "$STATE_DIR" "$LOG_DIR"
+BACKOFF_DIR="$STATE_DIR/backoff"
+# Backoff-Zeiten in Sekunden je Fehlversuch (Index = fail_count-1), letzter
+# Wert wird bei weiteren Versuchen wiederholt (Deckel bei 15min).
+BACKOFF_SCHEDULE=(15 30 60 120 300 900)
+FAILED_THRESHOLD=5
+
+mkdir -p "$STATE_DIR" "$LOG_DIR" "$BACKOFF_DIR"
 
 tmux_() { tmux -S "$TMUX_SOCK" "$@"; }
 
@@ -44,6 +50,23 @@ trim() {
 valid_name() {
     local n="$1"
     [[ "$n" =~ ^[[:alpha:][:digit:]_-][[:alpha:][:digit:]\ _-]{0,63}$ ]]
+}
+
+# Backoff-Zustand pro Session: "$BACKOFF_DIR/<name>" enthaelt
+# "fail_count;last_attempt_epoch". Verhindert, dass eine dauerhaft
+# fehlschlagende Session (z.B. "--continue" ohne vorhandene Konversation,
+# siehe docs/SESSIONS.md) den Supervisor in eine ungebremste
+# Neustart-Schleife alle $SUPERVISE_INTERVAL Sekunden zwingt (Robustheits-
+# Review 2026-09-24, B1).
+backoff_file() { printf '%s/%s' "$BACKOFF_DIR" "$(printf '%s' "$1" | tr '/ ' '__')"; }
+backoff_read() { local f; f="$(backoff_file "$1")"; [[ -f "$f" ]] && cat "$f" || echo "0;0"; }
+backoff_write() { printf '%s;%s\n' "$2" "$3" > "$(backoff_file "$1")"; }
+backoff_clear() { rm -f "$(backoff_file "$1")"; }
+backoff_delay_for() {
+    local idx=$(( $1 - 1 ))
+    (( idx < 0 )) && idx=0
+    (( idx >= ${#BACKOFF_SCHEDULE[@]} )) && idx=$((${#BACKOFF_SCHEDULE[@]} - 1))
+    echo "${BACKOFF_SCHEDULE[$idx]}"
 }
 
 ensure_config() {
@@ -256,19 +279,39 @@ build_cmd() {
 start_one() {
     local name="$1" workdir="$2" resume="$3" extra="$4" status="${5:-active}"
     if [[ "$status" == "archived" ]]; then
+        backoff_clear "$name"
         return 0
     fi
     if session_exists "$name"; then
+        backoff_clear "$name"
         log INFO "[$name] läuft bereits, überspringe"
         return 0
     fi
+
+    local fail_count last_attempt now
+    IFS=';' read -r fail_count last_attempt <<< "$(backoff_read "$name")"
+    now=$(date +%s)
+    if (( fail_count > 0 )); then
+        local delay; delay="$(backoff_delay_for "$fail_count")"
+        if (( now - last_attempt < delay )); then
+            # Noch in der Backoff-Pause: diesen Tick still uebergehen,
+            # kein Log-Spam alle $SUPERVISE_INTERVAL Sekunden.
+            return 0
+        fi
+    fi
+
     if [[ -n "$workdir" && ! -d "$workdir" ]]; then
         log ERROR "[$name] Arbeitsverzeichnis fehlt: $workdir"
+        backoff_write "$name" "$((fail_count + 1))" "$now"
         return 1
     fi
-    local cmd
+    local cmd attempt=$((fail_count + 1))
     cmd="$(build_cmd "$name" "$resume" "$extra")"
+    if (( attempt >= FAILED_THRESHOLD )); then
+        log WARN "[$name] Versuch $attempt in Folge (Backoff aktiv, letzter Fehlversuch vor $((now - last_attempt))s)"
+    fi
     log INFO "[$name] starte: $cmd (cwd=${workdir:-$HOME})"
+    backoff_write "$name" "$attempt" "$now"
     tmux_ new-session -d -s "$name" -c "${workdir:-$HOME}" "$cmd"
     # Kein "-t =$name" hier: tmux' exaktes Match bricht bei pipe-pane
     # (anders als bei has-session) mit "can't find pane", sobald $name ein
@@ -297,11 +340,64 @@ status_one() {
     local name="$1" workdir="$2" resume="$3" extra="$4" status="$5"
     local running="stopped"
     session_exists "$name" && running="running"
-    printf '  [%-8s] [%-8s] %-20s %s\n' "$status" "$running" "$name" "$workdir"
+    printf '  [%-8s] [%-8s] %-20s %s%s\n' "$status" "$running" "$name" "$workdir" "$(backoff_note "$name" "$running")"
+}
+
+# Haengt bei wiederholt fehlschlagenden Sessions einen Hinweis an (siehe
+# start_one/backoff_*), sonst leer.
+backoff_note() {
+    local name="$1" running="$2"
+    [[ "$running" == "stopped" ]] || return 0
+    local fail_count last_attempt
+    IFS=';' read -r fail_count last_attempt <<< "$(backoff_read "$name")"
+    (( fail_count >= FAILED_THRESHOLD )) || return 0
+    printf '  [failed: %s Versuche, zuletzt vor %ss]' "$fail_count" "$(( $(date +%s) - last_attempt ))"
 }
 
 cmd_start_all() { each_session start_one; }
-cmd_stop_all() { each_session stop_one; }
+
+# Stoppt alle Sessions PARALLEL (SIGINT an alle gleichzeitig, dann ein
+# gemeinsames, zeitlich begrenztes Warten) statt seriell mit "sleep 2" pro
+# Session wie stop_one — bei vielen Sessions sonst zu langsam fuer
+# TimeoutStopSec der systemd-Unit, und der einzige Stop-Pfad (siehe
+# cmd_supervise-Trap, ExecStop wurde bewusst aus der Unit entfernt) muss
+# in jedem Fall darunter bleiben. Robustheits-Review 2026-09-24, B2.
+cmd_stop_all() {
+    local name workdir resume extra status
+    local names=()
+    if [[ -f "$CONFIG_FILE" ]]; then
+        while IFS=';' read -r name workdir resume extra status || [[ -n "$name" ]]; do
+            [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
+            name="$(trim "$name")"
+            valid_name "$name" || continue
+            if session_exists "$name"; then
+                log INFO "[$name] stoppe (SIGINT)"
+                tmux_ send-keys -t "$name" C-c || true
+                names+=("$name")
+            fi
+        done < "$CONFIG_FILE"
+    fi
+    (( ${#names[@]} == 0 )) && return 0
+
+    local waited=0 max_wait=10 still_running name
+    while (( waited < max_wait )); do
+        still_running=0
+        for name in "${names[@]}"; do
+            session_exists "$name" && still_running=1
+        done
+        (( still_running == 0 )) && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    for name in "${names[@]}"; do
+        if session_exists "$name"; then
+            log INFO "[$name] reagiert nicht, kill-session"
+            tmux_ kill-session -t "$name" || true
+        fi
+    done
+}
+
 cmd_status_all() { echo "Claude CLI Sessions ($TMUX_SOCK):"; each_session status_one; }
 cmd_restart_all() { cmd_stop_all; sleep 1; cmd_start_all; }
 
@@ -318,7 +414,7 @@ cmd_list() {
         idx=$((idx + 1))
         running="stopped"
         session_exists "$name" && running="running"
-        printf '%-3s %-9s %-9s %-20s %s\n' "$idx" "$status" "$running" "$name" "$workdir"
+        printf '%-3s %-9s %-9s %-20s %s%s\n' "$idx" "$status" "$running" "$name" "$workdir" "$(backoff_note "$name" "$running")"
     done < "$CONFIG_FILE"
 }
 
@@ -391,8 +487,9 @@ cmd_unarchive() {
 # erhalten (nur der Controller-Eintrag verschwindet) - erst mit
 # --purge-workdir wird es zusätzlich unwiderruflich gelöscht.
 cmd_delete() {
-    local target="${1:?Usage: controller.sh delete <nummer|name> [--purge-workdir]}"
+    local target="${1:?Usage: controller.sh delete <nummer|name> [--purge-workdir [--force]]}"
     local purge="${2:-}"
+    local force="${3:-}"
     local name; name="$(resolve_target "$target")"
     session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
 
@@ -404,9 +501,25 @@ cmd_delete() {
     log INFO "[$name] aus $CONFIG_FILE entfernt"
 
     if [[ "$purge" == "--purge-workdir" ]]; then
-        if [[ -n "$workdir" && -d "$workdir" ]]; then
-            rm -rf -- "$workdir"
-            log INFO "[$name] Arbeitsverzeichnis gelöscht: $workdir"
+        # Leitplanken gegen einen Tippfehler in sessions.conf's workdir-Feld
+        # (z.B. workdir=/home/user statt .../home/user/x), der sonst
+        # unwiderruflich per "rm -rf" ausgefuehrt wuerde. Security-Review
+        # 2026-09-24, S5.
+        local real_workdir=""
+        [[ -n "$workdir" ]] && real_workdir="$(realpath -- "$workdir" 2>/dev/null || true)"
+        if [[ -z "$real_workdir" || ! -d "$real_workdir" ]]; then
+            log WARN "[$name] Workdir existiert nicht (mehr), nichts zu loeschen: ${workdir:-<leer>}"
+        elif [[ "$real_workdir" == "/" || "$real_workdir" == "$HOME" ]]; then
+            log ERROR "[$name] '$real_workdir' sieht nach einem kritischen Systempfad aus - Loeschen abgelehnt (auch mit --force)."
+            exit 1
+        else
+            local real_base; real_base="$(realpath -- "$PROJECTS_BASE_DIR" 2>/dev/null || echo "$PROJECTS_BASE_DIR")"
+            if [[ "$real_workdir" != "$real_base"/* && "$force" != "--force" ]]; then
+                log ERROR "[$name] '$real_workdir' liegt ausserhalb von PROJECTS_BASE_DIR ('$real_base') - zur Sicherheit abgelehnt. Zum Erzwingen: controller.sh delete $target --purge-workdir --force"
+                exit 1
+            fi
+            rm -rf -- "$real_workdir"
+            log INFO "[$name] Arbeitsverzeichnis gelöscht: $real_workdir"
         fi
     elif [[ -n "$workdir" ]]; then
         log INFO "[$name] Arbeitsverzeichnis bleibt erhalten: $workdir (mit --purge-workdir zusätzlich löschen)"
@@ -425,7 +538,12 @@ cmd_supervise() {
     cmd_start_all
     trap 'log INFO "Supervisor beendet, stoppe Sessions"; cmd_stop_all; exit 0' TERM INT
     while true; do
-        sleep "$SUPERVISE_INTERVAL"
+        # "sleep X" allein blockiert die Trap-Verarbeitung in Bash bis zu X
+        # Sekunden (Signal wird erst NACH dem Ende des Foreground-Kommandos
+        # behandelt) — "sleep X & wait $!" reagiert dagegen sofort auf
+        # TERM/INT, da wait beim Signal unterbrochen wird. Empirisch
+        # bestaetigt (Robustheits-Review 2026-09-24, B2).
+        sleep "$SUPERVISE_INTERVAL" & wait $!
         each_session start_one
     done
 }
@@ -449,11 +567,14 @@ Projekte verwalten:
                          $PROJECTS_BASE_DIR/<name>), in sessions.conf eintragen, starten
   archive <nr|name>      Session stoppen und archivieren (kein Autostart mehr)
   unarchive <nr|name>    Archivierte Session wieder aktivieren (Start separat nötig)
-  delete <nr|name> [--purge-workdir]
+  delete <nr|name> [--purge-workdir [--force]]
                          Session stoppen und Eintrag komplett aus sessions.conf
                          entfernen (nicht nur archivieren). Arbeitsverzeichnis
                          bleibt standardmäßig erhalten, --purge-workdir löscht
-                         es zusätzlich unwiderruflich.
+                         es zusätzlich unwiderruflich. Liegt das Workdir
+                         außerhalb von PROJECTS_BASE_DIR, ist zusätzlich
+                         --force nötig (Schutz vor Tippfehlern); "/" und
+                         $HOME werden immer verweigert.
 
 Config: $CONFIG_FILE
 State:  $STATE_DIR
@@ -474,7 +595,7 @@ main() {
         new)        cmd_new "$@" ;;
         archive)    cmd_archive "${1:-}" ;;
         unarchive)  cmd_unarchive "${1:-}" ;;
-        delete)     cmd_delete "${1:-}" "${2:-}" ;;
+        delete)     cmd_delete "${1:-}" "${2:-}" "${3:-}" ;;
         *)          usage; exit 1 ;;
     esac
 }

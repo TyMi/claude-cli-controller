@@ -165,3 +165,27 @@ Konversationsverlauf) erhalten, nur der Controller-Eintrag verschwindet.
 Mit `--purge-workdir` wird das Verzeichnis unwiderruflich per `rm -rf`
 gelöscht — vor allem für Wegwerf-/Test-Sessions gedacht, nicht für Projekte
 mit echtem Inhalt.
+
+**Leitplanken:** Liegt das Workdir außerhalb von `PROJECTS_BASE_DIR`
+(Default `~/projects`) — z.B. ein per `new <name> <eigener-pfad>` bewusst
+extern angelegtes Projekt — verlangt `--purge-workdir` zusätzlich
+`--force`:
+```bash
+./controller.sh delete kunde-b --purge-workdir --force
+```
+`/` und `$HOME` werden immer verweigert, auch mit `--force`. Das schützt
+vor einem Tippfehler im `workdir`-Feld von `sessions.conf` (z.B.
+`/home/user` statt `/home/user/x`), der sonst unwiderruflich per `rm -rf`
+ausgeführt würde.
+
+## Backoff bei wiederholt fehlschlagenden Sessions
+
+Scheitert eine Session beim Start dauerhaft (z.B. `--continue` ohne
+vorhandene Konversation, siehe oben), versucht `start`/`supervise` es
+nicht mehr bei jedem Intervall erneut, sondern mit steigenden Pausen:
+15s → 30s → 60s → 120s → 300s → 900s (danach konstant alle 15min). Ab 5
+Fehlversuchen in Folge erscheint die Session in `status`/`list` mit einem
+`[failed: N Versuche, zuletzt vor Xs]`-Hinweis. Sobald ein Start
+erfolgreich bleibt (Session existiert beim nächsten Intervall noch),
+wird der Zähler zurückgesetzt. Zustand pro Session:
+`$STATE_DIR/backoff/<name>`.
