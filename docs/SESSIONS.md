@@ -103,7 +103,7 @@ name;workdir;resume;extra_args;status
 
 | Feld         | Bedeutung                                                                 |
 |--------------|-----------------------------------------------------------------------------|
-| `name`       | Eindeutiger tmux-Session-Name. Erlaubt: Buchstaben (inkl. Umlaute), Ziffern, Leerzeichen, `-`, `_`, max. 64 Zeichen — `controller.sh new` lehnt alles andere ab, und Zeilen mit ungültigem Namen werden beim Einlesen übersprungen (siehe unten) |
+| `name`       | Eindeutiger tmux-Session-Name. Erlaubt: Buchstaben (inkl. Umlaute), Ziffern, Leerzeichen, `-`, `_`, max. 64 Zeichen, **mindestens ein Buchstabe** — `controller.sh new` lehnt alles andere ab, und Zeilen mit ungültigem Namen werden beim Einlesen übersprungen (siehe unten). Ein rein numerischer Name (z.B. `"2024"`) ist bewusst nicht erlaubt: `archive`/`unarchive`/`attach`/`delete` interpretieren eine Zahl immer als Listenindex aus `list`, nie als Namen — ein solcher Name wäre also nie per Namen ansprechbar gewesen |
 | `workdir`    | Arbeitsverzeichnis, in dem `claude` gestartet wird. Leer = `$HOME`          |
 | `resume`     | Leer = neue Session · `last`/`continue` = `--continue` · sonst = `--resume <id>` |
 | `extra_args` | Zusätzliche CLI-Flags, z.B. `--permission-mode acceptEdits`                |

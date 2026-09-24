@@ -12,6 +12,13 @@ Group=<user>
 Environment=HOME=/home/<user>
 Environment=PATH=/home/<user>/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/home/<user>/claude-cli-controller
+# Optionale Datei fuer ANTHROPIC_API_KEY o.ae. (fuehrendes "-" = optional,
+# Start scheitert nicht falls sie fehlt / per "claude login" gearbeitet
+# wird). Werte aus "Environment=" direkt in dieser Unit waeren per
+# "systemctl show" fuer jeden lokalen User lesbar - diese Datei dagegen
+# mit "chmod 600" anlegen (siehe docs/SETUP.md). Robustheits-Review
+# 2026-09-24, S7.
+EnvironmentFile=-/etc/claude-cli-controller.env
 ExecStart=/home/<user>/claude-cli-controller/controller.sh supervise
 Restart=on-failure
 RestartSec=5

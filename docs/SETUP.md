@@ -17,9 +17,11 @@ durchgängig durch den tatsächlichen Benutzernamen):
 ```bash
 # als <user>:
 claude login
-# oder alternativ per API-Key statt interaktivem Login:
-export ANTHROPIC_API_KEY=...   # dauerhaft z.B. in ~/.bashrc oder als
-                                # systemd Environment= Zeile (siehe unten)
+# oder alternativ per API-Key statt interaktivem Login (fuer den Service
+# siehe die EnvironmentFile-Variante in Schritt 3 - NICHT einfach
+# "Environment=ANTHROPIC_API_KEY=..." direkt in die Unit schreiben, das
+# waere per "systemctl show" fuer jeden lokalen User auf dem Host lesbar):
+export ANTHROPIC_API_KEY=...
 ```
 
 > Wichtig: Der systemd-Service läuft ohne interaktives Login-Shell. Prüfe,
@@ -56,6 +58,19 @@ enthält Platzhalter (`<user>`, Pfad) für Benutzername und Installationspfad
 sudo cp systemd/claude-cli-controller.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now claude-cli-controller.service
+```
+
+**Nur falls per API-Key statt `claude login` gearbeitet wird:** Die Unit
+liest optional `/etc/claude-cli-controller.env` (`EnvironmentFile=-`,
+schlägt nicht fehl falls die Datei nicht existiert). Datei mit
+eingeschränkten Rechten anlegen, **nicht** den Key direkt als
+`Environment=`-Zeile in die Unit schreiben (sonst per `systemctl show`
+für jeden lokalen User auf dem Host lesbar):
+
+```bash
+sudo install -m 600 -o <user> -g <user> /dev/null /etc/claude-cli-controller.env
+echo 'ANTHROPIC_API_KEY=sk-...' | sudo tee /etc/claude-cli-controller.env >/dev/null
+sudo systemctl restart claude-cli-controller.service
 ```
 
 Status/Logs prüfen:

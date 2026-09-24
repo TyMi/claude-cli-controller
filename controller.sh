@@ -24,6 +24,13 @@ BACKOFF_SCHEDULE=(15 30 60 120 300 900)
 FAILED_THRESHOLD=5
 
 mkdir -p "$STATE_DIR" "$LOG_DIR" "$BACKOFF_DIR"
+# Logs enthalten die komplette Terminal-Ausgabe jeder Session (potenziell
+# Secrets). "chmod" statt nur "mkdir -m", damit auch bereits vorhandene
+# Verzeichnisse aus aelteren Versionen nachtraeglich abgesichert werden -
+# ein Verzeichnis-Recht von 700 reicht aus, um andere lokale User vom
+# Zugriff auf die Dateien darin auszuschliessen, unabhaengig von deren
+# eigenem Modus. Robustheits-Review 2026-09-24, S6.
+chmod 700 "$STATE_DIR" "$LOG_DIR" "$BACKOFF_DIR" 2>/dev/null || true
 
 tmux_() { tmux -S "$TMUX_SOCK" "$@"; }
 
@@ -47,9 +54,14 @@ trim() {
 # Default-Pfad $PROJECTS_BASE_DIR/$name — siehe Security-Review 2026-09-24
 # (S1: Shell-Injection, per PoC bestaetigt; zuendet verzoegert, sobald die
 # betroffene Session/Pane endet).
+# Zusaetzlich mindestens ein Buchstabe Pflicht: verhindert rein numerische
+# Namen wie "2024", die "resolve_target" sonst immer als Listenindex statt
+# als Namen interpretiert und dadurch nie per Namen ansprechbar waeren
+# (Robustheits-Review 2026-09-24, B6).
 valid_name() {
     local n="$1"
-    [[ "$n" =~ ^[[:alpha:][:digit:]_-][[:alpha:][:digit:]\ _-]{0,63}$ ]]
+    [[ "$n" =~ ^[[:alpha:][:digit:]_-][[:alpha:][:digit:]\ _-]{0,63}$ ]] || return 1
+    [[ "$n" =~ [[:alpha:]] ]]
 }
 
 # Backoff-Zustand pro Session: "$BACKOFF_DIR/<name>" enthaelt
