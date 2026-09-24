@@ -97,6 +97,26 @@ Sobald der Container bootet, startet systemd innerhalb des Containers den
 `claude-cli-controller.service` automatisch — vorausgesetzt er wurde mit
 `enable` aktiviert (Schritt 3).
 
+## 4b. Log-Rotation einrichten (Pflichtschritt für Dauerbetrieb)
+
+Die pipe-pane-Mitschriften unter `.../logs/*.log` wachsen unbegrenzt (siehe
+`docs/SESSIONS.md`). Fertige Config mitgeliefert (Platzhalter `<user>`
+zuvor ersetzen):
+
+```bash
+sudo cp logrotate/claude-cli-controller.conf /etc/logrotate.d/claude-cli-controller
+sudo sed -i 's#<user>#DEIN-USER#g' /etc/logrotate.d/claude-cli-controller
+```
+
+## 4c. Bash-Completion (optional)
+
+```bash
+echo 'source /home/<user>/claude-cli-controller/completions/claude-cli-controller.bash' >> ~/.bashrc
+```
+
+Vervollständigt Subcommands sowie (per Nummer aus `list`) die Session-
+Referenz für `attach`/`archive`/`unarchive`/`rename`/`edit`/`delete`.
+
 ## 5. Nach Config-Änderungen
 
 ```bash

@@ -71,7 +71,7 @@ Nr  Status    Läuft    Name                 Workdir
 
 Die Nummer bezieht sich auf die Reihenfolge in `sessions.conf` (Kommentare
 zählen nicht mit) und kann überall dort verwendet werden, wo auch ein Name
-erwartet wird: `attach`, `archive`, `unarchive`.
+erwartet wird: `attach`, `archive`, `unarchive`, `rename`, `edit`, `delete`.
 
 ## Session archivieren
 
@@ -110,7 +110,9 @@ name;workdir;resume;extra_args;status
 | `status`     | `active` (Standard, leer = active) oder `archived`                        |
 
 Kommentarzeilen beginnen mit `#`, leere Zeilen werden ignoriert. Kein
-Semikolon in den Feldern selbst (zerschießt die Feld-Ausrichtung).
+Semikolon in den Feldern selbst (zerschießt die Feld-Ausrichtung). Taucht
+derselbe Name mehrfach auf (z.B. durch manuelles Bearbeiten), gilt die
+erste Definition, alle weiteren werden mit einer Warnung übersprungen.
 
 **Sicherheitshinweis:** `resume` und `extra_args` landen unquotiert in dem
 Kommandostring, den `tmux new-session` als Shell-Befehl ausführt. Diese
@@ -126,11 +128,30 @@ Session ausgeführt wird (Details/PoC: Security-Review 2026-09-24).
 
 ```bash
 ./controller.sh status          # Übersicht: running/stopped (alle Sessions)
+./controller.sh status --json   # dieselbe Übersicht maschinenlesbar (z.B. Monitoring)
 ./controller.sh list            # wie status, aber nummeriert + inkl. archived
 ./controller.sh attach main     # anhängen (per Name oder Nummer aus "list")
 # in tmux: Ctrl-b d              # lösen, Session läuft weiter
 ./controller.sh stop            # alle stoppen (SIGINT, danach kill falls nötig)
 ```
+
+`status --json` liefert pro Session `name`, `status`, `running`,
+`workdir`, `fail_count` und `last_attempt_epoch` (die beiden letzten aus
+dem Backoff-Zustand, siehe unten — `fail_count` zählt Fehlversuche **in
+Folge seit dem letzten Erfolg**, keine Lifetime-Neustartzahl).
+
+## Session umbenennen / Config-Felder ändern
+
+```bash
+./controller.sh rename 3 neuer-name
+./controller.sh edit 3 --workdir /srv/repos/kunde-b
+./controller.sh edit 3 --resume last --extra-args "--permission-mode acceptEdits"
+```
+
+`rename` funktioniert auch bei einer laufenden Session (benennt die
+tmux-Session und die Log-/Snapshot-Dateien mit um, ohne Datenverlust).
+`edit` ändert nur die angegebenen Felder und wirkt — wie `unarchive` —
+erst beim nächsten Start dieser Session, nicht sofort auf eine laufende.
 
 Direkt mit tmux (gleicher Socket wie der Controller):
 
@@ -147,8 +168,25 @@ Jede Session pipet ihre tmux-Pane-Ausgabe zusätzlich in eine Log-Datei:
 ~/.local/state/claude-cli-controller/logs/<name>.log
 ```
 
-Diese Dateien wachsen unbegrenzt — für Dauerbetrieb `logrotate` einrichten
-(siehe `docs/TROUBLESHOOTING.md`).
+Diese Datei ist die vollständige Mitschrift, roh inklusive ANSI-
+Escape-Codes (kaum von Hand lesbar) — wächst unbegrenzt, für Dauerbetrieb
+`logrotate` einrichten (siehe `docs/TROUBLESHOOTING.md`).
+
+Zusätzlich schreibt der Supervisor bei jedem Tick (`SUPERVISE_INTERVAL`,
+Default 15s) für jede laufende Session einen lesbaren Klartext-
+Schnappschuss des aktuell sichtbaren Pane-Inhalts:
+
+```
+~/.local/state/claude-cli-controller/logs/<name>.snapshot.txt
+```
+
+Diese Datei wird bei jedem Tick überschrieben (kein Anhängen, keine
+Rotation nötig) — gedacht für einen schnellen Blick ("was macht diese
+Session gerade"), nicht als vollständiges Protokoll: Ausgaben zwischen
+zwei Ticks können fehlen (tmux-Scrollback-Limit). Für lückenlose
+Nachvollziehbarkeit (z.B. "warum ist diese Session wiederholt
+gescheitert", siehe Backoff unten) bleibt `<name>.log` die maßgebliche
+Quelle.
 
 ## Session dauerhaft entfernen
 
@@ -189,3 +227,19 @@ Fehlversuchen in Folge erscheint die Session in `status`/`list` mit einem
 erfolgreich bleibt (Session existiert beim nächsten Intervall noch),
 wird der Zähler zurückgesetzt. Zustand pro Session:
 `$STATE_DIR/backoff/<name>`.
+
+## Backup & Restore
+
+```bash
+./controller.sh backup                          # Default-Ziel: $STATE_DIR/backups/claude-backup-<datum>.tar.gz
+./controller.sh backup /pfad/mein-backup.tar.gz  # eigenes Ziel
+
+./controller.sh restore /pfad/mein-backup.tar.gz --force
+```
+
+`backup` sichert `config/sessions.conf`, `~/.claude.json` (Trust-Zustand)
+und `~/.claude/` (Session-Transkripte, Settings) als `tar.gz` — gedacht
+für eine schnelle Wiederherstellung nach einem Container-Neuaufbau.
+`restore` überschreibt den aktuellen Stand vollständig und verlangt
+deshalb `--force`; laufende Sessions vorher mit `controller.sh stop`
+beenden, sonst kann der Zustand inkonsistent werden.

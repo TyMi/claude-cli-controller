@@ -73,21 +73,14 @@ tmux -S ~/.local/state/claude-cli-controller/tmux.sock kill-session -t <name>
 
 ## Log-Dateien wachsen unbegrenzt
 
-`logrotate`-Konfiguration ergänzen, z.B. unter
-`/etc/logrotate.d/claude-cli-controller`:
+Fertige `logrotate`-Config liegt unter `logrotate/claude-cli-controller.conf`
+bei (Installation: siehe `docs/SETUP.md`, Schritt 4b). `copytruncate` ist
+darin notwendig, da tmux `pipe-pane` die Datei offen hält — ein normales
+rename+neu-anlegen würde die laufende `pipe-pane`-Instanz nicht mitbekommen.
 
-```
-/home/<user>/.local/state/claude-cli-controller/logs/*.log {
-    weekly
-    rotate 4
-    compress
-    missingok
-    notifempty
-    copytruncate
-}
-```
-
-`copytruncate` ist hier notwendig, da tmux `pipe-pane` die Datei offen hält.
+Die `.snapshot.txt`-Dateien (periodischer Klartext-Schnappschuss, siehe
+`docs/SESSIONS.md`) brauchen keine Rotation, da sie bei jedem
+Supervisor-Tick überschrieben statt angehängt werden.
 
 ## Nach Neustart verbindet sich die Desktop App zu einer neuen, leeren Session
 

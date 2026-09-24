@@ -102,16 +102,25 @@ require_config() {
     [[ -f "$CONFIG_FILE" ]] || { log ERROR "Config nicht gefunden: $CONFIG_FILE (siehe: controller.sh new)"; exit 1; }
 }
 
-# Liest sessions.conf und ruft $1 (callback) je Session-Zeile mit
-# name workdir resume extra status auf. Kommentare/Leerzeilen werden übersprungen.
-# Fehlt die Config-Datei (z.B. direkt nach der Installation), wird das nur
-# geloggt statt den Aufrufer (insb. "supervise") hart abbrechen zu lassen.
-each_session() {
-    local callback="$1"
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        log WARN "Config nicht gefunden: $CONFIG_FILE — noch keine Sessions konfiguriert (siehe: controller.sh new)"
-        return 0
-    fi
+# Liest CONFIG_FILE EINMAL pro Skriptaufruf in parallele Arrays ein, statt
+# dass jede der Lookup-Funktionen unten (frueher: each_session,
+# session_defined, resolve_target, config_get_workdir, cmd_list) die Datei
+# separat oeffnet und die Semikolon-Zeilen erneut parst. Ungueltige Namen
+# werden hier zentral einmal gefiltert+geloggt statt in jeder Funktion
+# einzeln. config_set_status/config_remove_entry/config_rename_entry/
+# config_edit_entry schreiben die Datei weiterhin zeilenbasiert (erhalten
+# Kommentare/Formatierung exakt) und setzen SESSIONS_LOADED=0, damit ein
+# nachfolgender Aufruf hier neu einliest. Robustheits-Review 2026-09-24,
+# O3 (zentrales Parsing) + O4 (Duplikat-Erkennung).
+SESSION_NAMES=(); SESSION_WORKDIRS=(); SESSION_RESUMES=(); SESSION_EXTRAS=(); SESSION_STATUSES=()
+SESSIONS_LOADED=0
+
+load_sessions() {
+    (( SESSIONS_LOADED )) && return 0
+    SESSIONS_LOADED=1
+    SESSION_NAMES=(); SESSION_WORKDIRS=(); SESSION_RESUMES=(); SESSION_EXTRAS=(); SESSION_STATUSES=()
+    [[ -f "$CONFIG_FILE" ]] || return 0
+    local name workdir resume extra status existing
     while IFS=';' read -r name workdir resume extra status || [[ -n "$name" ]]; do
         [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
         name="$(trim "$name")"
@@ -121,26 +130,48 @@ each_session() {
         status="$(trim "${status:-}")"
         [[ -z "$status" ]] && status="active"
         if ! valid_name "$name"; then
-            log ERROR "[$name] ungueltiger Session-Name in $CONFIG_FILE (nur Buchstaben/Ziffern/Leerzeichen/-/_), Zeile wird uebersprungen"
+            log ERROR "[$name] ungueltiger Session-Name in $CONFIG_FILE (nur Buchstaben/Ziffern/Leerzeichen/-/_, mind. 1 Buchstabe), Zeile wird uebersprungen"
             continue
         fi
+        for existing in "${SESSION_NAMES[@]}"; do
+            if [[ "$existing" == "$name" ]]; then
+                log WARN "[$name] mehrfach in $CONFIG_FILE definiert - weitere Definition wird ignoriert, erste gilt"
+                continue 2
+            fi
+        done
+        SESSION_NAMES+=("$name")
+        SESSION_WORKDIRS+=("$workdir")
+        SESSION_RESUMES+=("$resume")
+        SESSION_EXTRAS+=("$extra")
+        SESSION_STATUSES+=("$status")
+    done < "$CONFIG_FILE"
+}
+
+# Ruft $1 (callback) je Session mit name workdir resume extra status auf.
+each_session() {
+    local callback="$1" i
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log WARN "Config nicht gefunden: $CONFIG_FILE — noch keine Sessions konfiguriert (siehe: controller.sh new)"
+        return 0
+    fi
+    load_sessions
+    for (( i=0; i<${#SESSION_NAMES[@]}; i++ )); do
         # "|| true": ein Fehler in einer einzelnen Session (z.B. fehlendes
         # workdir in start_one) darf unter set -e nicht die Verarbeitung
         # aller weiteren Sessions abbrechen. start_one loggt den Fehler
         # bereits selbst, bevor es return 1 liefert.
-        "$callback" "$name" "$workdir" "$resume" "$extra" "$status" || true
-    done < "$CONFIG_FILE"
+        "$callback" "${SESSION_NAMES[$i]}" "${SESSION_WORKDIRS[$i]}" "${SESSION_RESUMES[$i]}" "${SESSION_EXTRAS[$i]}" "${SESSION_STATUSES[$i]}" || true
+    done
 }
 
 session_exists() { tmux_ has-session -t "=$1" 2>/dev/null; }
 
 session_defined() {
-    local target="$1" name
-    [[ -f "$CONFIG_FILE" ]] || return 1
-    while IFS=';' read -r name _ || [[ -n "$name" ]]; do
-        [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
-        [[ "$(trim "$name")" == "$target" ]] && return 0
-    done < "$CONFIG_FILE"
+    local target="$1" i
+    load_sessions
+    for (( i=0; i<${#SESSION_NAMES[@]}; i++ )); do
+        [[ "${SESSION_NAMES[$i]}" == "$target" ]] && return 0
+    done
     return 1
 }
 
@@ -149,15 +180,14 @@ session_defined() {
 resolve_target() {
     local arg="$1"
     if [[ "$arg" =~ ^[0-9]+$ ]]; then
-        local idx=0 name found=""
         require_config
-        while IFS=';' read -r name _ || [[ -n "$name" ]]; do
-            [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
-            idx=$((idx + 1))
-            if [[ "$idx" == "$arg" ]]; then found="$(trim "$name")"; break; fi
-        done < "$CONFIG_FILE"
-        [[ -n "$found" ]] || { log ERROR "Keine Session mit Nummer $arg (siehe: controller.sh list)"; exit 1; }
-        echo "$found"
+        load_sessions
+        local idx=$((arg - 1))
+        if (( idx < 0 || idx >= ${#SESSION_NAMES[@]} )); then
+            log ERROR "Keine Session mit Nummer $arg (siehe: controller.sh list)"
+            exit 1
+        fi
+        echo "${SESSION_NAMES[$idx]}"
     else
         echo "$arg"
     fi
@@ -191,21 +221,17 @@ config_set_status() {
         exit 1
     fi
     mv "$tmpfile" "$CONFIG_FILE"
+    SESSIONS_LOADED=0
 }
 
 # Gibt das Workdir-Feld der Session $1 aus sessions.conf zurück (leer,
 # falls nicht gefunden).
 config_get_workdir() {
-    local target="$1" line name workdir
-    [[ -f "$CONFIG_FILE" ]] || return 0
-    while IFS='' read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-        IFS=';' read -r name workdir _ <<< "$line"
-        if [[ "$(trim "$name")" == "$target" ]]; then
-            trim "${workdir:-}"
-            return 0
-        fi
-    done < "$CONFIG_FILE"
+    local target="$1" i
+    load_sessions
+    for (( i=0; i<${#SESSION_NAMES[@]}; i++ )); do
+        [[ "${SESSION_NAMES[$i]}" == "$target" ]] && { echo "${SESSION_WORKDIRS[$i]}"; return 0; }
+    done
 }
 
 # Entfernt die Zeile der Session $1 komplett aus sessions.conf (Gegenstück
@@ -234,6 +260,72 @@ config_remove_entry() {
         exit 1
     fi
     mv "$tmpfile" "$CONFIG_FILE"
+    SESSIONS_LOADED=0
+}
+
+# Benennt die Session $1 zu $2 um (Gegenstück zu config_set_status, aendert
+# aber das Name-Feld statt Status). Fuer "rename" (F8).
+config_rename_entry() {
+    local target="$1" newname="$2"
+    require_config
+    local tmpfile
+    tmpfile="$(mktemp "${CONFIG_FILE}.XXXXXX")"
+    local line name workdir resume extra status found=0
+    while IFS='' read -r line || [[ -n "$line" ]]; do
+        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+            printf '%s\n' "$line" >> "$tmpfile"
+            continue
+        fi
+        IFS=';' read -r name workdir resume extra status <<< "$line"
+        if [[ "$(trim "$name")" == "$target" ]]; then
+            printf '%s;%s;%s;%s;%s\n' \
+                "$newname" "$(trim "${workdir:-}")" "$(trim "${resume:-}")" "$(trim "${extra:-}")" "$(trim "${status:-}")" >> "$tmpfile"
+            found=1
+        else
+            printf '%s\n' "$line" >> "$tmpfile"
+        fi
+    done < "$CONFIG_FILE"
+    if [[ "$found" -eq 0 ]]; then
+        rm -f "$tmpfile"
+        log ERROR "[$target] nicht in $CONFIG_FILE gefunden"
+        exit 1
+    fi
+    mv "$tmpfile" "$CONFIG_FILE"
+    SESSIONS_LOADED=0
+}
+
+# Aendert gezielt workdir/resume/extra_args der Session $1, je nachdem
+# welches der set_*-Flags (0/1) gesetzt ist. Fuer "edit" (F8).
+config_edit_entry() {
+    local target="$1" set_workdir="$2" new_workdir="$3" set_resume="$4" new_resume="$5" set_extra="$6" new_extra="$7"
+    require_config
+    local tmpfile
+    tmpfile="$(mktemp "${CONFIG_FILE}.XXXXXX")"
+    local line name workdir resume extra status found=0
+    while IFS='' read -r line || [[ -n "$line" ]]; do
+        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+            printf '%s\n' "$line" >> "$tmpfile"
+            continue
+        fi
+        IFS=';' read -r name workdir resume extra status <<< "$line"
+        if [[ "$(trim "$name")" == "$target" ]]; then
+            workdir="$(trim "${workdir:-}")"; resume="$(trim "${resume:-}")"; extra="$(trim "${extra:-}")"
+            (( set_workdir )) && workdir="$new_workdir"
+            (( set_resume )) && resume="$new_resume"
+            (( set_extra )) && extra="$new_extra"
+            printf '%s;%s;%s;%s;%s\n' "$(trim "$name")" "$workdir" "$resume" "$extra" "$(trim "${status:-}")" >> "$tmpfile"
+            found=1
+        else
+            printf '%s\n' "$line" >> "$tmpfile"
+        fi
+    done < "$CONFIG_FILE"
+    if [[ "$found" -eq 0 ]]; then
+        rm -f "$tmpfile"
+        log ERROR "[$target] nicht in $CONFIG_FILE gefunden"
+        exit 1
+    fi
+    mv "$tmpfile" "$CONFIG_FILE"
+    SESSIONS_LOADED=0
 }
 
 # Markiert $1 in ~/.claude.json als vertrauenswürdig (hasTrustDialogAccepted),
@@ -366,6 +458,21 @@ backoff_note() {
     printf '  [failed: %s Versuche, zuletzt vor %ss]' "$fail_count" "$(( $(date +%s) - last_attempt ))"
 }
 
+# Schreibt einen lesbaren Klartext-Schnappschuss des aktuellen Pane-Inhalts
+# nach "$LOG_DIR/<name>.snapshot.txt" (ueberschrieben, kein Anhaengen).
+# Ergaenzt die vollstaendige, aber ANSI-verseuchte pipe-pane-Mitschrift in
+# "<name>.log" um eine schnell lesbare Momentaufnahme fuer Menschen - ersetzt
+# sie bewusst NICHT: periodische Snapshots koennten Ausgaben zwischen zwei
+# Intervallen verpassen (Scrollback-Limit), was fuer Fehlerdiagnose (z.B.
+# B1-Backoff: "warum scheitert die Session wiederholt?") die falsche Wahl
+# waere. Wird vom Supervisor-Loop alle SUPERVISE_INTERVAL Sekunden fuer
+# jede laufende Session aufgerufen. Robustheits-Review 2026-09-24, O1.
+snapshot_one() {
+    local name="$1"
+    session_exists "$name" || return 0
+    tmux_ capture-pane -p -t "$name" > "$LOG_DIR/$name.snapshot.txt" 2>/dev/null || true
+}
+
 cmd_start_all() { each_session start_one; }
 
 # Stoppt alle Sessions PARALLEL (SIGINT an alle gleichzeitig, dann ein
@@ -375,20 +482,15 @@ cmd_start_all() { each_session start_one; }
 # cmd_supervise-Trap, ExecStop wurde bewusst aus der Unit entfernt) muss
 # in jedem Fall darunter bleiben. Robustheits-Review 2026-09-24, B2.
 cmd_stop_all() {
-    local name workdir resume extra status
-    local names=()
-    if [[ -f "$CONFIG_FILE" ]]; then
-        while IFS=';' read -r name workdir resume extra status || [[ -n "$name" ]]; do
-            [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
-            name="$(trim "$name")"
-            valid_name "$name" || continue
-            if session_exists "$name"; then
-                log INFO "[$name] stoppe (SIGINT)"
-                tmux_ send-keys -t "$name" C-c || true
-                names+=("$name")
-            fi
-        done < "$CONFIG_FILE"
-    fi
+    load_sessions
+    local i names=()
+    for (( i=0; i<${#SESSION_NAMES[@]}; i++ )); do
+        if session_exists "${SESSION_NAMES[$i]}"; then
+            log INFO "[${SESSION_NAMES[$i]}] stoppe (SIGINT)"
+            tmux_ send-keys -t "${SESSION_NAMES[$i]}" C-c || true
+            names+=("${SESSION_NAMES[$i]}")
+        fi
+    done
     (( ${#names[@]} == 0 )) && return 0
 
     local waited=0 max_wait=10 still_running name
@@ -413,21 +515,57 @@ cmd_stop_all() {
 cmd_status_all() { echo "Claude CLI Sessions ($TMUX_SOCK):"; each_session status_one; }
 cmd_restart_all() { cmd_stop_all; sleep 1; cmd_start_all; }
 
+# Maschinenlesbare Variante von "status" fuer Monitoring (z.B. Home-
+# Assistant Command-Line-Sensor). fail_count/last_attempt_epoch sind die
+# vom Backoff getrackten Werte (siehe backoff_*) - "fail_count" zaehlt
+# Fehlversuche IN FOLGE seit dem letzten Erfolg, nicht die Lifetime-Anzahl
+# an Neustarts, um hier keine Zahl vorzutaeuschen, die tatsaechlich nicht
+# getrackt wird. Feature-Vorschlag 2026-09-24, F1.
+cmd_status_json() {
+    load_sessions
+    local i name status running fail_count last_attempt
+    {
+        for (( i=0; i<${#SESSION_NAMES[@]}; i++ )); do
+            name="${SESSION_NAMES[$i]}"
+            status="${SESSION_STATUSES[$i]}"
+            running="stopped"
+            session_exists "$name" && running="running"
+            IFS=';' read -r fail_count last_attempt <<< "$(backoff_read "$name")"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$running" "${SESSION_WORKDIRS[$i]}" "$fail_count" "$last_attempt"
+        done
+    } | python3 -c '
+import json, sys
+out = []
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    name, status, running, workdir, fail_count, last_attempt = line.split("\t")
+    fail_count = int(fail_count)
+    out.append({
+        "name": name,
+        "status": status,
+        "running": running == "running",
+        "workdir": workdir,
+        "fail_count": fail_count,
+        "last_attempt_epoch": int(last_attempt) if fail_count > 0 else None,
+    })
+print(json.dumps(out, indent=2))
+'
+}
+
 # Nummerierte Übersicht aller konfigurierten Sessions (auch archivierte),
 # als Basis für "controller.sh archive/unarchive <nummer>".
 cmd_list() {
     require_config
-    local idx=0 name workdir resume extra status running
+    load_sessions
     printf '%-3s %-9s %-9s %-20s %s\n' "Nr" "Status" "Läuft" "Name" "Workdir"
-    while IFS=';' read -r name workdir resume extra status || [[ -n "$name" ]]; do
-        [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
-        name="$(trim "$name")"; workdir="$(trim "${workdir:-}")"; status="$(trim "${status:-}")"
-        [[ -z "$status" ]] && status="active"
-        idx=$((idx + 1))
+    local i running
+    for (( i=0; i<${#SESSION_NAMES[@]}; i++ )); do
         running="stopped"
-        session_exists "$name" && running="running"
-        printf '%-3s %-9s %-9s %-20s %s%s\n' "$idx" "$status" "$running" "$name" "$workdir" "$(backoff_note "$name" "$running")"
-    done < "$CONFIG_FILE"
+        session_exists "${SESSION_NAMES[$i]}" && running="running"
+        printf '%-3s %-9s %-9s %-20s %s%s\n' "$((i+1))" "${SESSION_STATUSES[$i]}" "$running" "${SESSION_NAMES[$i]}" "${SESSION_WORKDIRS[$i]}" "$(backoff_note "${SESSION_NAMES[$i]}" "$running")"
+    done
 }
 
 # Legt ein neues Projekt an: Verzeichnis erstellen, in sessions.conf
@@ -538,6 +676,72 @@ cmd_delete() {
     fi
 }
 
+# Benennt eine Session um: Config-Eintrag, laufende tmux-Session (falls
+# aktiv) und die Log-/Snapshot-Dateien. Feature-Vorschlag 2026-09-24, F8.
+cmd_rename() {
+    local target="${1:?Usage: controller.sh rename <nr|name> <neuer-name>}"
+    local new_name="${2:?Usage: controller.sh rename <nr|name> <neuer-name>}"
+    local name; name="$(resolve_target "$target")"
+    session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
+    if ! valid_name "$new_name"; then
+        log ERROR "[$new_name] ungueltiger Session-Name (nur Buchstaben/Ziffern/Leerzeichen/-/_, mind. 1 Buchstabe, max. 64 Zeichen)"
+        exit 1
+    fi
+    if [[ "$new_name" == "$name" ]]; then
+        log INFO "[$name] Name unveraendert"
+        return 0
+    fi
+    session_defined "$new_name" && { log ERROR "[$new_name] existiert bereits in $CONFIG_FILE"; exit 1; }
+
+    if session_exists "$name"; then
+        # Laufenden Log-Pipe erst sauber schliessen (ohne "-o": schliesst
+        # bestehenden Pipe statt einen zweiten zu oeffnen), sonst wuerde die
+        # laufende "cat"-Instanz stur weiter unter dem ALTEN Dateinamen
+        # schreiben (offener Dateideskriptor ueberlebt auch das "mv" unten,
+        # aber ohne Pfad waere der Inhalt danach nicht mehr auffindbar).
+        tmux_ pipe-pane -t "$name"
+        tmux_ rename-session -t "$name" "$new_name"
+    fi
+    config_rename_entry "$name" "$new_name"
+    log INFO "[$name] umbenannt zu [$new_name] in $CONFIG_FILE"
+
+    [[ -f "$LOG_DIR/$name.log" ]] && mv -- "$LOG_DIR/$name.log" "$LOG_DIR/$new_name.log"
+    [[ -f "$LOG_DIR/$name.snapshot.txt" ]] && mv -- "$LOG_DIR/$name.snapshot.txt" "$LOG_DIR/$new_name.snapshot.txt"
+    backoff_clear "$name"
+
+    if session_exists "$new_name"; then
+        tmux_ pipe-pane -t "$new_name" -o "cat >> $(printf '%q' "$LOG_DIR/$new_name.log")"
+    fi
+}
+
+# Aendert workdir/resume/extra_args einer bestehenden Session gezielt,
+# ohne die restliche Zeile in sessions.conf anzufassen. Wirkt erst beim
+# naechsten Start dieser Session (analog zu "unarchive": kein impliziter
+# Neustart, um eine laufende Session nicht ueberraschend zu beenden).
+# Feature-Vorschlag 2026-09-24, F8.
+cmd_edit() {
+    local target="${1:?Usage: controller.sh edit <nr|name> [--workdir <pfad>] [--resume <last|continue|id|''>] [--extra-args <flags>]}"
+    shift
+    local name; name="$(resolve_target "$target")"
+    session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
+
+    local new_workdir="" new_resume="" new_extra="" set_workdir=0 set_resume=0 set_extra=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --workdir)    new_workdir="${2:?--workdir braucht einen Wert}"; set_workdir=1; shift 2 ;;
+            --resume)     new_resume="${2-}"; set_resume=1; shift 2 ;;
+            --extra-args) new_extra="${2-}"; set_extra=1; shift 2 ;;
+            *) log ERROR "Unbekannte Option: $1 (erlaubt: --workdir, --resume, --extra-args)"; exit 1 ;;
+        esac
+    done
+    if (( ! set_workdir && ! set_resume && ! set_extra )); then
+        log ERROR "Nichts zu aendern angegeben (siehe: controller.sh edit <nr|name> --workdir/--resume/--extra-args <wert>)"
+        exit 1
+    fi
+    config_edit_entry "$name" "$set_workdir" "$new_workdir" "$set_resume" "$new_resume" "$set_extra" "$new_extra"
+    log INFO "[$name] Config aktualisiert (wirkt erst beim naechsten Start dieser Session)"
+}
+
 cmd_attach() {
     local target="${1:?Usage: controller.sh attach <nummer|name>}"
     local name; name="$(resolve_target "$target")"
@@ -557,7 +761,45 @@ cmd_supervise() {
         # bestaetigt (Robustheits-Review 2026-09-24, B2).
         sleep "$SUPERVISE_INTERVAL" & wait $!
         each_session start_one
+        each_session snapshot_one
     done
+}
+
+# Sichert sessions.conf, ~/.claude.json und ~/.claude/ (Session-Transkripte,
+# Settings, Trust-Zustand) als tar.gz - fuer eine schnelle Wiederherstellung
+# nach einem Container-Neuaufbau. Feature-Vorschlag 2026-09-24, F9.
+cmd_backup() {
+    local dest="${1:-$STATE_DIR/backups/claude-backup-$(date +%Y%m%d-%H%M%S).tar.gz}"
+    mkdir -p "$(dirname "$dest")"
+    local sources=()
+    [[ -f "$CONFIG_FILE" ]] && sources+=("$CONFIG_FILE")
+    [[ -f "$CLAUDE_JSON" ]] && sources+=("$CLAUDE_JSON")
+    [[ -d "$HOME/.claude" ]] && sources+=("$HOME/.claude")
+    if (( ${#sources[@]} == 0 )); then
+        log ERROR "Nichts zu sichern gefunden (weder $CONFIG_FILE, $CLAUDE_JSON noch $HOME/.claude vorhanden)"
+        exit 1
+    fi
+    log INFO "Sichere: ${sources[*]}"
+    tar -czf "$dest" "${sources[@]}"
+    log INFO "Backup geschrieben: $dest ($(du -h "$dest" 2>/dev/null | cut -f1))"
+}
+
+# Gegenstueck zu "backup": stellt sessions.conf, ~/.claude.json und
+# ~/.claude/ aus einer zuvor erstellten tar.gz wieder her. Ueberschreibt
+# den aktuellen Stand - analog zum --force-Muster von "delete
+# --purge-workdir" bewusst nicht interaktiv, sondern per explizitem Flag,
+# damit es scriptbar bleibt und zum Rest des Tools passt.
+cmd_restore() {
+    local archive="${1:?Usage: controller.sh restore <backup-datei.tar.gz> --force}"
+    local force="${2:-}"
+    [[ -f "$archive" ]] || { log ERROR "Backup-Datei nicht gefunden: $archive"; exit 1; }
+    if [[ "$force" != "--force" ]]; then
+        log ERROR "Restore ueberschreibt $CONFIG_FILE, $CLAUDE_JSON und $HOME/.claude - zur Sicherheit ist --force noetig: controller.sh restore $archive --force"
+        log ERROR "Laufende Sessions vorher stoppen (controller.sh stop), sonst evtl. inkonsistenter Zustand."
+        exit 1
+    fi
+    tar -xzf "$archive" -C /
+    log INFO "Restore aus $archive abgeschlossen."
 }
 
 usage() {
@@ -568,7 +810,7 @@ Sessions verwalten:
   start                  Alle aktiven Sessions starten (idempotent, überspringt archivierte)
   stop                   Alle Sessions stoppen
   restart                Stop + Start
-  status                 Status aller Sessions anzeigen
+  status [--json]        Status aller Sessions anzeigen (--json: maschinenlesbar, z.B. für Monitoring)
   list                   Nummerierte Übersicht aller Sessions (für archive/unarchive/attach)
   attach <nr|name>       An eine laufende Session anhängen (Ctrl-b d zum Lösen)
   supervise              Sessions starten und dauerhaft überwachen (für systemd)
@@ -579,6 +821,11 @@ Projekte verwalten:
                          $PROJECTS_BASE_DIR/<name>), in sessions.conf eintragen, starten
   archive <nr|name>      Session stoppen und archivieren (kein Autostart mehr)
   unarchive <nr|name>    Archivierte Session wieder aktivieren (Start separat nötig)
+  rename <nr|name> <neuer-name>
+                         Session umbenennen (Config, laufende tmux-Session, Log-Dateien)
+  edit <nr|name> [--workdir <pfad>] [--resume <wert>] [--extra-args <flags>]
+                         Workdir/Resume/Extra-Args gezielt ändern, wirkt erst beim
+                         nächsten Start dieser Session
   delete <nr|name> [--purge-workdir [--force]]
                          Session stoppen und Eintrag komplett aus sessions.conf
                          entfernen (nicht nur archivieren). Arbeitsverzeichnis
@@ -587,6 +834,12 @@ Projekte verwalten:
                          außerhalb von PROJECTS_BASE_DIR, ist zusätzlich
                          --force nötig (Schutz vor Tippfehlern); "/" und
                          $HOME werden immer verweigert.
+
+Backup:
+  backup [ziel.tar.gz]   Sichert $CONFIG_FILE, $CLAUDE_JSON und ~/.claude/
+                         (Default-Ziel: $STATE_DIR/backups/claude-backup-<datum>.tar.gz)
+  restore <datei.tar.gz> --force
+                         Stellt ein Backup wieder her (überschreibt aktuellen Stand)
 
 Config: $CONFIG_FILE
 State:  $STATE_DIR
@@ -600,14 +853,18 @@ main() {
         start)      cmd_start_all ;;
         stop)       cmd_stop_all ;;
         restart)    cmd_restart_all ;;
-        status)     cmd_status_all ;;
+        status)     [[ "${1:-}" == "--json" ]] && cmd_status_json || cmd_status_all ;;
         list)       cmd_list ;;
         attach)     cmd_attach "${1:-}" ;;
         supervise)  cmd_supervise ;;
         new)        cmd_new "$@" ;;
         archive)    cmd_archive "${1:-}" ;;
         unarchive)  cmd_unarchive "${1:-}" ;;
+        rename)     cmd_rename "${1:-}" "${2:-}" ;;
+        edit)       cmd_edit "$@" ;;
         delete)     cmd_delete "${1:-}" "${2:-}" "${3:-}" ;;
+        backup)     cmd_backup "${1:-}" ;;
+        restore)    cmd_restore "${1:-}" "${2:-}" ;;
         *)          usage; exit 1 ;;
     esac
 }

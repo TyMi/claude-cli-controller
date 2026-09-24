@@ -33,11 +33,15 @@ Sessions automatisch und überwacht sie danach fortlaufend.
 | `controller.sh attach <nr\|name>` | An Session anhängen                                         |
 | `controller.sh archive <nr\|name>` | Session stoppen und archivieren (kein Autostart mehr)      |
 | `controller.sh unarchive <nr\|name>` | Archivierte Session wieder aktivieren                    |
+| `controller.sh rename <nr\|name> <neuer-name>` | Session umbenennen                              |
+| `controller.sh edit <nr\|name> [--workdir ...] [--resume ...] [--extra-args ...]` | Config-Felder ändern |
+| `controller.sh delete <nr\|name> [--purge-workdir [--force]]` | Session entfernen, optional inkl. Verzeichnis |
 | `controller.sh start`          | Alle aktiven Sessions starten (idempotent, überspringt archivierte) |
 | `controller.sh stop`           | Alle Sessions stoppen                                            |
 | `controller.sh restart`        | Stop + Start                                                     |
-| `controller.sh status`         | Laufende/gestoppte Sessions anzeigen                             |
+| `controller.sh status [--json]` | Laufende/gestoppte Sessions anzeigen (optional maschinenlesbar) |
 | `controller.sh supervise`      | Start + Endlos-Watchdog (Einstiegspunkt für systemd)             |
+| `controller.sh backup [ziel]` / `restore <datei> --force` | Konfiguration + `~/.claude/` sichern/wiederherstellen |
 
 ## Dokumentation
 
