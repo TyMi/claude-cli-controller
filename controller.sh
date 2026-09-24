@@ -33,6 +33,19 @@ trim() {
     printf '%s' "$s"
 }
 
+# Nur unproblematische Zeichen erlauben (Buchstaben inkl. Umlaute per
+# [:alpha:]/UTF-8-Locale, Ziffern, Leerzeichen, Bindestrich, Unterstrich).
+# Blockiert insbesondere Anführungszeichen, Semikolon, $, Backtick,
+# Backslash, /, |, &, <, >, (, ), {, }, # und ".". $name landet sonst
+# ungefiltert in tmux-Kommandos (pipe-pane laeuft ueber eine Shell) und im
+# Default-Pfad $PROJECTS_BASE_DIR/$name — siehe Security-Review 2026-09-24
+# (S1: Shell-Injection, per PoC bestaetigt; zuendet verzoegert, sobald die
+# betroffene Session/Pane endet).
+valid_name() {
+    local n="$1"
+    [[ "$n" =~ ^[[:alpha:][:digit:]_-][[:alpha:][:digit:]\ _-]{0,63}$ ]]
+}
+
 ensure_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
         mkdir -p "$(dirname "$CONFIG_FILE")"
@@ -72,6 +85,10 @@ each_session() {
         extra="$(trim "${extra:-}")"
         status="$(trim "${status:-}")"
         [[ -z "$status" ]] && status="active"
+        if ! valid_name "$name"; then
+            log ERROR "[$name] ungueltiger Session-Name in $CONFIG_FILE (nur Buchstaben/Ziffern/Leerzeichen/-/_), Zeile wird uebersprungen"
+            continue
+        fi
         # "|| true": ein Fehler in einer einzelnen Session (z.B. fehlendes
         # workdir in start_one) darf unter set -e nicht die Verarbeitung
         # aller weiteren Sessions abbrechen. start_one loggt den Fehler
@@ -253,7 +270,13 @@ start_one() {
     cmd="$(build_cmd "$name" "$resume" "$extra")"
     log INFO "[$name] starte: $cmd (cwd=${workdir:-$HOME})"
     tmux_ new-session -d -s "$name" -c "${workdir:-$HOME}" "$cmd"
-    tmux_ pipe-pane -t "$name" -o "cat >> '$LOG_DIR/$name.log'"
+    # Kein "-t =$name" hier: tmux' exaktes Match bricht bei pipe-pane
+    # (anders als bei has-session) mit "can't find pane", sobald $name ein
+    # Leerzeichen enthaelt (live getestet, tmux 3.4) — real vorkommende
+    # Namen wie "CamDisplay Schützen" wuerden sonst nie geloggt. Die
+    # eigentliche Injection wird bereits durch valid_name() verhindert;
+    # printf %q auf den Logpfad bleibt als zusaetzliche Absicherung.
+    tmux_ pipe-pane -t "$name" -o "cat >> $(printf '%q' "$LOG_DIR/$name.log")"
 }
 
 stop_one() {
@@ -308,18 +331,32 @@ cmd_new() {
     local extra="${4:-}"
 
     ensure_config
+    if ! valid_name "$name"; then
+        log ERROR "[$name] ungueltiger Session-Name (nur Buchstaben/Ziffern/Leerzeichen/-/_ erlaubt, max. 64 Zeichen)"
+        exit 1
+    fi
     if session_defined "$name"; then
         log ERROR "[$name] existiert bereits in $CONFIG_FILE"
         exit 1
     fi
 
+    # Nur neu angelegte Verzeichnisse automatisch trusten (siehe
+    # trust_project_dir) — ein bereits vorhandenes Verzeichnis (z.B. ein
+    # fremdes Repo als explizites $workdir) soll den Trust-Dialog nicht
+    # stillschweigend umgehen. Security-Review 2026-09-24 (S2).
+    local created_workdir=0
+    [[ -e "$workdir" ]] || created_workdir=1
     mkdir -p "$workdir"
     log INFO "[$name] Verzeichnis angelegt: $workdir"
 
     printf '%s;%s;%s;%s;active\n' "$name" "$workdir" "$resume" "$extra" >> "$CONFIG_FILE"
     log INFO "[$name] in $CONFIG_FILE eingetragen"
 
-    trust_project_dir "$workdir"
+    if (( created_workdir )); then
+        trust_project_dir "$workdir"
+    else
+        log WARN "[$name] Verzeichnis existierte bereits, Auto-Trust uebersprungen — Trust-Dialog ggf. manuell in 'controller.sh attach $name' bestaetigen"
+    fi
     # Erststart: "$workdir" wurde soeben angelegt, es gibt also garantiert
     # noch keine Konversation. "claude --continue" bricht in diesem Fall
     # mit "No conversation found to continue" ab statt neu zu starten -

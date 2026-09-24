@@ -103,7 +103,7 @@ name;workdir;resume;extra_args;status
 
 | Feld         | Bedeutung                                                                 |
 |--------------|-----------------------------------------------------------------------------|
-| `name`       | Eindeutiger tmux-Session-Name                                              |
+| `name`       | Eindeutiger tmux-Session-Name. Erlaubt: Buchstaben (inkl. Umlaute), Ziffern, Leerzeichen, `-`, `_`, max. 64 Zeichen — `controller.sh new` lehnt alles andere ab, und Zeilen mit ungültigem Namen werden beim Einlesen übersprungen (siehe unten) |
 | `workdir`    | Arbeitsverzeichnis, in dem `claude` gestartet wird. Leer = `$HOME`          |
 | `resume`     | Leer = neue Session · `last`/`continue` = `--continue` · sonst = `--resume <id>` |
 | `extra_args` | Zusätzliche CLI-Flags, z.B. `--permission-mode acceptEdits`                |
@@ -113,10 +113,14 @@ Kommentarzeilen beginnen mit `#`, leere Zeilen werden ignoriert. Kein
 Semikolon in den Feldern selbst (zerschießt die Feld-Ausrichtung).
 
 **Sicherheitshinweis:** `resume` und `extra_args` landen unquotiert in dem
-Kommandostring, den `tmux new-session` als Shell-Befehl ausführt (nur
-`name` wird intern sauber gequotet). Diese Felder sind also effektiv
-Shell-Code — dort gehören nur vertrauenswürdige, selbst gepflegte Werte
-hinein, keine Eingaben aus nicht vertrauenswürdigen Quellen.
+Kommandostring, den `tmux new-session` als Shell-Befehl ausführt. Diese
+Felder sind also effektiv Shell-Code — dort gehören nur vertrauenswürdige,
+selbst gepflegte Werte hinein, keine Eingaben aus nicht vertrauenswürdigen
+Quellen. `name` wird dagegen per Zeichen-Allowlist validiert (siehe oben)
+und zusätzlich sauber gequotet, da er auch in `pipe-pane` (Log-Datei) und
+als `--remote-control`-Argument verwendet wird — ohne die Allowlist ließe
+sich darüber Shell-Code einschleusen, der beim Enden der jeweiligen
+Session ausgeführt wird (Details/PoC: Security-Review 2026-09-24).
 
 ## Sessions bedienen
 
