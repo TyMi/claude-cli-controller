@@ -465,7 +465,13 @@ start_one() {
     # Namen wie "CamDisplay Schützen" wuerden sonst nie geloggt. Die
     # eigentliche Injection wird bereits durch valid_name() verhindert;
     # printf %q auf den Logpfad bleibt als zusaetzliche Absicherung.
-    tmux_ pipe-pane -t "$name" -o "cat >> $(printf '%q' "$LOG_DIR/$name.log")"
+    # "|| true": faengt eine bereits beendete Pane ab (z.B. ein extrem
+    # schnell fehlschlagendes "claude --continue", oder in Tests ein
+    # Dummy-Binary wie /bin/true) - ohne diesen Guard wuerde ein
+    # fehlschlagendes Log-Setup den gesamten "new"/"start"-Aufruf per
+    # set -e abbrechen, obwohl die Session selbst erfolgreich erstellt
+    # wurde. Gefunden beim Schreiben der bats-Tests, 2026-09-25.
+    tmux_ pipe-pane -t "$name" -o "cat >> $(printf '%q' "$LOG_DIR/$name.log")" || true
 }
 
 stop_one() {
@@ -757,7 +763,7 @@ cmd_rename() {
         # laufende "cat"-Instanz stur weiter unter dem ALTEN Dateinamen
         # schreiben (offener Dateideskriptor ueberlebt auch das "mv" unten,
         # aber ohne Pfad waere der Inhalt danach nicht mehr auffindbar).
-        tmux_ pipe-pane -t "$name"
+        tmux_ pipe-pane -t "$name" || true
         tmux_ rename-session -t "$name" "$new_name"
     fi
     config_rename_entry "$name" "$new_name"
@@ -768,7 +774,7 @@ cmd_rename() {
     backoff_clear "$name"
 
     if session_exists "$new_name"; then
-        tmux_ pipe-pane -t "$new_name" -o "cat >> $(printf '%q' "$LOG_DIR/$new_name.log")"
+        tmux_ pipe-pane -t "$new_name" -o "cat >> $(printf '%q' "$LOG_DIR/$new_name.log")" || true
     fi
 }
 
@@ -911,7 +917,13 @@ main() {
         start)      cmd_start_all ;;
         stop)       cmd_stop_all ;;
         restart)    cmd_restart_all ;;
-        status)     [[ "${1:-}" == "--json" ]] && cmd_status_json || cmd_status_all ;;
+        status)
+            if [[ "${1:-}" == "--json" ]]; then
+                cmd_status_json
+            else
+                cmd_status_all
+            fi
+            ;;
         list)       cmd_list ;;
         attach)     cmd_attach "${1:-}" ;;
         supervise)  cmd_supervise ;;

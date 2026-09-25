@@ -1,6 +1,7 @@
 # claude-cli-controller
 
 ![Built with AI](https://img.shields.io/badge/Built_with-AI-success)
+[![CI](https://github.com/TyMi/claude-cli-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/TyMi/claude-cli-controller/actions/workflows/ci.yml)
 
 Startet, überwacht und verwaltet mehrere Claude Code CLI Sessions zentral in
 einem LXC-Container. Jede Session läuft als detached `tmux`-Session; ein
@@ -42,6 +43,20 @@ Sessions automatisch und überwacht sie danach fortlaufend.
 | `controller.sh status [--json]` | Laufende/gestoppte Sessions anzeigen (optional maschinenlesbar) |
 | `controller.sh supervise`      | Start + Endlos-Watchdog (Einstiegspunkt für systemd)             |
 | `controller.sh backup [ziel]` / `restore <datei> --force` | Konfiguration + `~/.claude/` sichern/wiederherstellen |
+
+## Tests
+
+```bash
+sudo apt-get install -y shellcheck bats tmux python3
+shellcheck controller.sh
+bats test/controller.bats
+```
+
+Läuft bei jedem Push/PR automatisch via GitHub Actions (siehe Badge oben) —
+für dieses öffentliche Repo ohne Minutenlimit/Kosten. `test/controller.bats`
+deckt die im Zuge der Reviews vom 2026-09-24/25 gefundenen und gefixten
+Probleme als dauerhafte Regressionstests ab (u.a. S1 Shell-Injection, B1
+Backoff, S5 Purge-Leitplanken, S4 resume-Validierung).
 
 ## Dokumentation
 
