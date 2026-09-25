@@ -3,11 +3,16 @@
 # Format (Semikolon-getrennt, kein Semikolon in den Feldern selbst):
 #   name;workdir;resume;extra_args;status
 #
-# name        eindeutiger tmux-Session-Name
+# name        eindeutiger tmux-Session-Name. Nur Buchstaben (inkl. Umlaute),
+#             Ziffern, Leerzeichen, "-", "_", max. 64 Zeichen, mindestens ein
+#             Buchstabe (kein rein numerischer Name) - alles andere wird
+#             abgelehnt (siehe docs/SESSIONS.md).
 # workdir     Arbeitsverzeichnis für "claude" (leer = $HOME)
 # resume      leer = neue Session
 #             "last" / "continue" = --continue (letzte Session im workdir fortsetzen)
-#             <session-id> = --resume <session-id>
+#             <session-uuid> = --resume <session-uuid> (nur das UUID-Format
+#             xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx wird akzeptiert, alles
+#             andere wird verworfen und die Session startet ohne --resume)
 # extra_args  zusätzliche CLI-Flags, z.B. --permission-mode acceptEdits
 # status      "active" (Standard, leer = active) oder "archived"
 #             (archivierte Sessions werden bei start/supervise übersprungen)

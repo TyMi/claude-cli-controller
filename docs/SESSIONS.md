@@ -155,6 +155,13 @@ in jeder Session ausführen lassen.
 dem Backoff-Zustand, siehe unten — `fail_count` zählt Fehlversuche **in
 Folge seit dem letzten Erfolg**, keine Lifetime-Neustartzahl).
 
+`stop`/`archive`/`delete` schicken automatisch **zwei** `C-c` im Abstand
+von 0,3s: Claude Code beendet sich nicht nach einem einzelnen Ctrl-C
+(zeigt nur „Press Ctrl-C again to exit" an und braucht das zweite
+innerhalb von ~1s, sonst setzt sich die Anzeige zurück). Wer manuell per
+`attach` in einer hängenden Session eingreift, muss das ebenfalls
+beachten — ein einzelnes Ctrl-C reicht dort nicht.
+
 ## Session umbenennen / Config-Felder ändern
 
 ```bash

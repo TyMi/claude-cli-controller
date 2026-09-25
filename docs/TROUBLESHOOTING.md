@@ -29,7 +29,10 @@ Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 Der Service läuft als `<user>` ohne interaktives Terminal. Login muss
 vorher einmalig interaktiv als `<user>` erfolgen (`claude login`), oder es
-wird ein `ANTHROPIC_API_KEY` per `Environment=` in der Unit-Datei gesetzt.
+wird ein `ANTHROPIC_API_KEY` über `/etc/claude-cli-controller.env`
+gesetzt (siehe `docs/SETUP.md`, Schritt 3) — **nicht** direkt als
+`Environment=`-Zeile in der Unit, das wäre per `systemctl show` für jeden
+lokalen User auf dem Host lesbar.
 
 ## Session hängt am "Trust this folder?"-Dialog
 
@@ -61,7 +64,9 @@ tmux -S ~/.local/state/claude-cli-controller/tmux.sock kill-session -t <name>
 
 ```bash
 ./controller.sh attach <name>
-# prüfen, ggf. Ctrl-c, dann Ctrl-b d zum Lösen
+# pruefen; ein einzelnes Ctrl-C beendet Claude Code NICHT (zeigt nur
+# "Press Ctrl-C again to exit" und braucht ein zweites Ctrl-C innerhalb
+# von ~1s, siehe docs/SESSIONS.md) - danach Ctrl-b d zum Loesen
 ```
 
 Wenn das nicht hilft:

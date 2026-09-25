@@ -42,7 +42,10 @@ falls der Controller-Prozess selbst abstürzt.
 | `controller.sh`                             | Start/Stop/Status/Supervise-Logik           |
 | `config/sessions.conf`                      | Welche Sessions mit welchen Optionen laufen |
 | `systemd/claude-cli-controller.service`     | Autostart-Definition für den Container      |
-| `~/.local/state/claude-cli-controller/`     | Laufzeitdaten: tmux-Socket, Logs pro Session|
+| `logrotate/claude-cli-controller.conf`      | Log-Rotation für `.../logs/*.log`           |
+| `completions/claude-cli-controller.bash`    | Bash-Completion (optional)                  |
+| `test/controller.bats`, `.github/workflows/ci.yml` | Regressionstests + CI (shellcheck + bats) |
+| `~/.local/state/claude-cli-controller/`     | Laufzeitdaten: tmux-Socket, `logs/` (Mitschrift + Snapshot je Session), `backoff/` (Fehlversuche pro Session), `backups/` (Default-Ziel von `controller.sh backup`) |
 
 ## Nicht-Ziele (bewusst weggelassen)
 
