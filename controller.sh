@@ -34,7 +34,13 @@ chmod 700 "$STATE_DIR" "$LOG_DIR" "$BACKOFF_DIR" 2>/dev/null || true
 
 tmux_() { tmux -S "$TMUX_SOCK" "$@"; }
 
-log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2"; }
+# Nach stderr statt stdout: mehrere Funktionen (build_cmd, resolve_target,
+# config_get_workdir) werden per "$(...)" aufgerufen, deren stdout also als
+# Rueckgabewert interpretiert wird - eine log-Zeile auf stdout wuerde dort
+# den eigentlichen Rueckgabewert verunreinigen. journalctl/systemctl
+# erfassen stderr genauso wie stdout, im Terminal ist ebenfalls kein
+# Unterschied sichtbar. Robustheits-Review 2026-09-25, im Zuge von S4.
+log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2" >&2; }
 
 # Reines Bash-Trimming (kein "echo | xargs"): xargs interpretiert
 # Anführungszeichen selbst und bricht bei Werten wie "O'Briens-Projekt"
@@ -115,11 +121,24 @@ require_config() {
 SESSION_NAMES=(); SESSION_WORKDIRS=(); SESSION_RESUMES=(); SESSION_EXTRAS=(); SESSION_STATUSES=()
 SESSIONS_LOADED=0
 
+# sessions.conf ist effektiv Shell-Code (resume/extra_args landen
+# unquotiert im Kommandostring, siehe docs/SESSIONS.md) - warnen, falls
+# andere lokale User sie beschreiben koennen. Robustheits-Review
+# 2026-09-25, S4.
+check_config_perms() {
+    local perms; perms="$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)" || return 0
+    local group_digit="${perms: -2:1}" other_digit="${perms: -1}"
+    if (( (10#$group_digit & 2) || (10#$other_digit & 2) )); then
+        log WARN "$CONFIG_FILE ist fuer andere lokale User beschreibbar (Rechte: $perms) - resume/extra_args werden als Shell-Code ausgefuehrt. Empfehlung: chmod 600 $CONFIG_FILE"
+    fi
+}
+
 load_sessions() {
     (( SESSIONS_LOADED )) && return 0
     SESSIONS_LOADED=1
     SESSION_NAMES=(); SESSION_WORKDIRS=(); SESSION_RESUMES=(); SESSION_EXTRAS=(); SESSION_STATUSES=()
     [[ -f "$CONFIG_FILE" ]] || return 0
+    check_config_perms
     local name workdir resume extra status existing
     while IFS=';' read -r name workdir resume extra status || [[ -n "$name" ]]; do
         [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
@@ -373,7 +392,17 @@ build_cmd() {
     case "$resume" in
         "") ;;
         last|continue) cmd="$cmd --continue" ;;
-        *) cmd="$cmd --resume $resume" ;;
+        # Nur "last"/"continue" oder eine Session-UUID (Format wie von
+        # "claude" selbst vergeben, z.B. 16999acc-1280-4d8f-b168-...)
+        # zulassen und sauber quoten - fuer diesen Wert ist nie Shell-
+        # Syntax noetig, ein unquotierter, unvalidierter Wert waere sonst
+        # ein weiterer Injection-Pfad neben dem in S1 gefixten $name.
+        # Robustheits-Review 2026-09-25, S4.
+        [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])
+            cmd="$cmd --resume $(printf '%q' "$resume")" ;;
+        *)
+            log ERROR "[$name] ungueltiger resume-Wert '$resume' in $CONFIG_FILE (erlaubt: leer, 'last', 'continue' oder eine Session-UUID) - Session startet ohne --resume"
+            ;;
     esac
     [[ "$REMOTE_CONTROL" == "1" ]] && cmd="$cmd --remote-control $(printf '%q' "$name")"
     [[ -n "$extra" ]] && cmd="$cmd $extra"
@@ -445,7 +474,13 @@ stop_one() {
         log INFO "[$name] läuft nicht"
         return 0
     fi
-    log INFO "[$name] stoppe (SIGINT, dann kill falls nötig)"
+    log INFO "[$name] stoppe (2x C-c, dann kill falls nötig)"
+    # Claude Code braucht zwei C-c IM SELBEN kurzen Zeitfenster zum Beenden:
+    # der erste zeigt nur "Press Ctrl-C again to exit" und setzt sich bei
+    # zu grossem Abstand zurueck. Live verifiziert (tmux 3.4, 2026-09-24):
+    # 0.3s Abstand reicht sicher, >1.5s Abstand reicht NICHT. B3.
+    tmux_ send-keys -t "$name" C-c || true
+    sleep 0.3
     tmux_ send-keys -t "$name" C-c || true
     sleep 2
     if session_exists "$name"; then
@@ -499,14 +534,24 @@ cmd_stop_all() {
     local i names=()
     for (( i=0; i<${#SESSION_NAMES[@]}; i++ )); do
         if session_exists "${SESSION_NAMES[$i]}"; then
-            log INFO "[${SESSION_NAMES[$i]}] stoppe (SIGINT)"
+            log INFO "[${SESSION_NAMES[$i]}] stoppe (2x C-c)"
             tmux_ send-keys -t "${SESSION_NAMES[$i]}" C-c || true
             names+=("${SESSION_NAMES[$i]}")
         fi
     done
     (( ${#names[@]} == 0 )) && return 0
 
-    local waited=0 max_wait=10 still_running name
+    # Zweites C-c fuer alle im selben kurzen Zeitfenster (siehe stop_one,
+    # B3) - EIN gemeinsames sleep statt pro Session, damit alle innerhalb
+    # des ~1s-Fensters bleiben, das Claude Code fuer den zweiten Ctrl-C
+    # erwartet.
+    sleep 0.3
+    local name
+    for name in "${names[@]}"; do
+        tmux_ send-keys -t "$name" C-c || true
+    done
+
+    local waited=0 max_wait=10 still_running
     while (( waited < max_wait )); do
         still_running=0
         for name in "${names[@]}"; do

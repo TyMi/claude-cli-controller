@@ -113,7 +113,7 @@ name;workdir;resume;extra_args;status
 |--------------|-----------------------------------------------------------------------------|
 | `name`       | Eindeutiger tmux-Session-Name. Erlaubt: Buchstaben (inkl. Umlaute), Ziffern, Leerzeichen, `-`, `_`, max. 64 Zeichen, **mindestens ein Buchstabe** — `controller.sh new` lehnt alles andere ab, und Zeilen mit ungültigem Namen werden beim Einlesen übersprungen (siehe unten). Ein rein numerischer Name (z.B. `"2024"`) ist bewusst nicht erlaubt: `archive`/`unarchive`/`attach`/`delete` interpretieren eine Zahl immer als Listenindex aus `list`, nie als Namen — ein solcher Name wäre also nie per Namen ansprechbar gewesen |
 | `workdir`    | Arbeitsverzeichnis, in dem `claude` gestartet wird. Leer = `$HOME`          |
-| `resume`     | Leer = neue Session · `last`/`continue` = `--continue` · sonst = `--resume <id>` |
+| `resume`     | Leer = neue Session · `last`/`continue` = `--continue` · sonst = `--resume <uuid>` — nur eine Session-UUID im Format `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` wird akzeptiert und sauber gequotet, alles andere wird verworfen (Session startet dann ohne `--resume`, siehe Sicherheitshinweis unten) |
 | `extra_args` | Zusätzliche CLI-Flags, z.B. `--permission-mode acceptEdits`                |
 | `status`     | `active` (Standard, leer = active) oder `archived`                        |
 
@@ -122,15 +122,22 @@ Semikolon in den Feldern selbst (zerschießt die Feld-Ausrichtung). Taucht
 derselbe Name mehrfach auf (z.B. durch manuelles Bearbeiten), gilt die
 erste Definition, alle weiteren werden mit einer Warnung übersprungen.
 
-**Sicherheitshinweis:** `resume` und `extra_args` landen unquotiert in dem
-Kommandostring, den `tmux new-session` als Shell-Befehl ausführt. Diese
-Felder sind also effektiv Shell-Code — dort gehören nur vertrauenswürdige,
+**Sicherheitshinweis:** `extra_args` landet unquotiert in dem
+Kommandostring, den `tmux new-session` als Shell-Befehl ausführt — dieses
+Feld ist also effektiv Shell-Code, dort gehören nur vertrauenswürdige,
 selbst gepflegte Werte hinein, keine Eingaben aus nicht vertrauenswürdigen
-Quellen. `name` wird dagegen per Zeichen-Allowlist validiert (siehe oben)
-und zusätzlich sauber gequotet, da er auch in `pipe-pane` (Log-Datei) und
-als `--remote-control`-Argument verwendet wird — ohne die Allowlist ließe
-sich darüber Shell-Code einschleusen, der beim Enden der jeweiligen
-Session ausgeführt wird (Details/PoC: Security-Review 2026-09-24).
+Quellen. `name` (Zeichen-Allowlist, siehe oben) und seit 2026-09-25 auch
+`resume` (nur `last`/`continue`/UUID, alles andere wird verworfen) sind
+dagegen validiert und sauber gequotet — `name` u.a. deshalb, weil er auch
+in `pipe-pane` (Log-Datei) und als `--remote-control`-Argument verwendet
+wird; ohne die Allowlist ließe sich darüber Shell-Code einschleusen, der
+beim Enden der jeweiligen Session ausgeführt wird (Details/PoC:
+Security-Review 2026-09-24).
+
+Zusätzlich warnt `controller.sh` bei jedem Aufruf, falls `sessions.conf`
+für andere lokale User beschreibbar ist (`chmod 600` empfohlen) — wer
+diese Datei schreiben kann, kann darüber effektiv beliebigen Shell-Code
+in jeder Session ausführen lassen.
 
 ## Sessions bedienen
 
