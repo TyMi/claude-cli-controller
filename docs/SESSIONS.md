@@ -85,6 +85,14 @@ mehr automatisch gestartet wird. Der Eintrag bleibt erhalten.
 ./controller.sh archive altprojekt   # oder per Name
 ```
 
+Wird `status` stattdessen von Hand in `sessions.conf` auf `archived`
+gesetzt (statt über diesen Befehl), wird eine noch laufende Session
+**nicht** automatisch gestoppt — nur bei jedem `start`/`supervise`-Tick als
+Warnung geloggt (`... ist als 'archived' markiert, läuft aber noch`).
+Bewusst kein automatischer Zwangs-Stopp, um nicht durch einen bloßen
+Tippfehler beim Editieren eine gerade aktiv genutzte Session zu beenden —
+zum tatsächlichen Stoppen weiterhin `controller.sh archive` verwenden.
+
 ## Session reaktivieren
 
 ```bash

@@ -384,6 +384,19 @@ start_one() {
     local name="$1" workdir="$2" resume="$3" extra="$4" status="${5:-active}"
     if [[ "$status" == "archived" ]]; then
         backoff_clear "$name"
+        # Nur warnen, KEIN aktiver Stopp: eine Session, die z.B. durch
+        # manuelles Editieren von sessions.conf (statt ueber "archive",
+        # das explizit stoppt) als archived markiert wurde, aber noch
+        # laeuft, bleibt bewusst unangetastet - ein automatischer Zwangs-
+        # Stopp wuerde bei jedem Tick (SUPERVISE_INTERVAL) auch eine gerade
+        # aktiv genutzte Session treffen koennen, z.B. durch einen blossen
+        # Tippfehler beim Editieren. Passt zur Philosophie aus
+        # session-lifecycle.md: Sessions werden nur ueber explizite
+        # Aktionen gestoppt, nie automatisch im Hintergrund. Feature-
+        # Analyse 2026-09-24/25, O5.
+        if session_exists "$name"; then
+            log WARN "[$name] ist als 'archived' markiert, laeuft aber noch - kein automatischer Stopp. Zum Stoppen: controller.sh archive $name"
+        fi
         return 0
     fi
     if session_exists "$name"; then
