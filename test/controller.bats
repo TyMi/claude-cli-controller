@@ -24,6 +24,19 @@ setup() {
 }
 
 teardown() {
+    # Falls ein Test einen Hintergrund-"supervise"-Prozess gestartet hat
+    # (PID in supervise.pid abgelegt): IMMER hier abraeumen, nicht inline im
+    # Test - eine fehlschlagende Assertion im Testkoerper (unter Bats'
+    # errexit) bricht die Testfunktion sofort ab und ueberspringt jeden
+    # inline-Cleanup danach. Ohne diesen Schritt bleibt die "while true"-
+    # Supervisor-Schleife verwaist laufen, und Bats wartet beim naechsten
+    # Test offenbar auf alle Kindprozesse der Session, bevor es weitermacht -
+    # das ganze Suite-Run haengt dann. Live beobachtet 2026-10-10.
+    if [[ -f "$TESTDIR/supervise.pid" ]]; then
+        local pid; pid="$(cat "$TESTDIR/supervise.pid")"
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
     tmux -S "$TESTDIR/state/tmux.sock" kill-server >/dev/null 2>&1 || true
     rm -rf "$TESTDIR"
 }
@@ -127,6 +140,42 @@ EOF
     run "$CTL" start
     [[ "$output" == *"läuft bereits"* ]]
     [ ! -f "$TESTDIR/state/backoff/demo" ]
+}
+
+# --- Supervisor: sessions.conf pro Tick neu einlesen ---
+#
+# Bewusst KEIN Test ueber "archive" einer laufenden Session: archive stoppt
+# selbst aktiv (2x C-c + Kill-Fallback, siehe stop_one), das wuerde mit dem
+# Supervisor-Tick um dieselbe tmux-Session wettlaufen und den Endzustand
+# zufaellig machen (beim Schreiben entdeckt - der archive-eigene
+# Kill-Fallback kann eine vom Bug neu gestartete Session durch Zufall
+# wieder einholen, was den Test faelschlich gruen macht). Stattdessen eine
+# Transition, die selbst nichts in tmux anfasst: "unarchive" aendert nur
+# die Config-Datei, der Supervisor allein entscheidet ueber den Start.
+
+@test "supervise picks up an unarchive from another invocation without needing a restart" {
+    mkdir -p "$TESTDIR/projects/demo"
+    echo "demo;$TESTDIR/projects/demo;;;archived" > "$CLAUDE_CTRL_CONFIG"
+    CLAUDE_BIN="/bin/sleep 30" CLAUDE_CTRL_INTERVAL=1 "$CTL" supervise &
+    echo "$!" > "$TESTDIR/supervise.pid"
+
+    # Archivierte Session: der Supervisor darf sie ueber mehrere Ticks hinweg
+    # nie starten.
+    sleep 2.5
+    ! tmux -S "$TESTDIR/state/tmux.sock" has-session -t "=demo" 2>/dev/null
+
+    run "$CTL" unarchive demo
+    [ "$status" -eq 0 ]
+
+    # Ohne den Reload-Fix bliebe der laengst laufende Supervisor-Prozess bei
+    # seinem Config-Stand vom eigenen Start (status=archived) und wuerde
+    # "demo" nie hochfahren.
+    local i
+    for i in $(seq 1 20); do
+        tmux -S "$TESTDIR/state/tmux.sock" has-session -t "=demo" 2>/dev/null && break
+        sleep 0.2
+    done
+    tmux -S "$TESTDIR/state/tmux.sock" has-session -t "=demo"
 }
 
 # --- S5: Leitplanken fuer --purge-workdir ---

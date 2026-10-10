@@ -824,6 +824,9 @@ cmd_supervise() {
         # TERM/INT, da wait beim Signal unterbrochen wird. Empirisch
         # bestaetigt (Robustheits-Review 2026-09-24, B2).
         sleep "$SUPERVISE_INTERVAL" & wait $!
+        # sessions.conf pro Tick neu einlesen, sonst arbeitet der Supervisor
+        # dauerhaft mit dem Stand vom Start (archive/new/unarchive wirkten nicht).
+        SESSIONS_LOADED=0
         each_session start_one
         each_session snapshot_one
     done
