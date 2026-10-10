@@ -23,3 +23,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y bats tmux python3
       - name: Run bats test suite
         run: bats test/controller.bats
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

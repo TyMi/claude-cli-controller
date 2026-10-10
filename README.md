@@ -56,7 +56,9 @@ Läuft bei jedem Push/PR automatisch via GitHub Actions (siehe Badge oben) —
 für dieses öffentliche Repo ohne Minutenlimit/Kosten. `test/controller.bats`
 deckt die im Zuge der Reviews vom 2026-09-24/25 gefundenen und gefixten
 Probleme als dauerhafte Regressionstests ab (u.a. S1 Shell-Injection, B1
-Backoff, S5 Purge-Leitplanken, S4 resume-Validierung).
+Backoff, S5 Purge-Leitplanken, S4 resume-Validierung). Zusätzlich prüft ein
+dritter CI-Job (`gitleaks`) jeden Push/PR gegen die volle Git-Historie auf
+versehentlich committete Secrets.
 
 ## Dokumentation
 
