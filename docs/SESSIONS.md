@@ -48,6 +48,17 @@ or run `./controller.sh trust <nr|name>` (explicit, works regardless of
 is already running). Disable
 auto-trust entirely with `CLAUDE_CTRL_AUTO_TRUST=0`.
 
+`trust` stores the symlink-resolved (`realpath`) path of the workdir, while
+`new` stores the path exactly as given. If the workdir is (or lies behind) a
+symlink, the entry may not match the path `claude` looks up; in that case
+confirm the dialog once via `controller.sh attach`.
+
+`new` and `trust` modify `~/.claude.json` with a read-modify-write of the
+whole file, while running `claude` processes update the same file. If a
+session writes at the very same moment, one of the two changes can be lost.
+If a session still shows the trust dialog after `trust`, simply run `trust`
+again.
+
 `workdir`, `resume` and `extra_args` must not contain a semicolon or a line
 break (they would corrupt the `sessions.conf` line); `new` and `edit`
 reject such values.

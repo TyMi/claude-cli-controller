@@ -52,6 +52,12 @@ tmux -S ~/.local/state/claude-cli-controller/tmux.sock kill-session -t <name>
 
 Alternatively, confirm the dialog once via `./controller.sh attach <name>`.
 
+If the dialog still appears after `trust`: `~/.claude.json` is rewritten as a
+whole and running `claude` processes write to it as well, so a concurrent
+write can overwrite the change — run `trust` again. If the workdir is a
+symlink, `trust` stores the resolved path, which may differ from the path
+`claude` uses; confirm the dialog once via `attach` in that case.
+
 ## Session hangs / does not respond
 
 ```bash
