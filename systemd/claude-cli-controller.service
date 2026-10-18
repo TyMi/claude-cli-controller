@@ -12,32 +12,30 @@ Group=<user>
 Environment=HOME=/home/<user>
 Environment=PATH=/home/<user>/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/home/<user>/claude-cli-controller
-# Optionale Datei fuer ANTHROPIC_API_KEY o.ae. (fuehrendes "-" = optional,
+# Optionale Datei für ANTHROPIC_API_KEY o. ä. (führendes "-" = optional,
 # Start scheitert nicht falls sie fehlt / per "claude login" gearbeitet
-# wird). Werte aus "Environment=" direkt in dieser Unit waeren per
-# "systemctl show" fuer jeden lokalen User lesbar - diese Datei dagegen
-# mit "chmod 600" anlegen (siehe docs/SETUP.md). Robustheits-Review
-# 2026-09-24, S7.
+# wird). Werte aus "Environment=" direkt in dieser Unit wären per
+# "systemctl show" für jeden lokalen User lesbar - diese Datei dagegen
+# mit "chmod 600" anlegen (siehe docs/SETUP.md).
 EnvironmentFile=-/etc/claude-cli-controller.env
 ExecStart=/home/<user>/claude-cli-controller/controller.sh supervise
 Restart=on-failure
 RestartSec=5
-# Bewusst KEIN eigenes ExecStop: "controller.sh supervise" faengt TERM
-# selbst ab (Trap) und stoppt alle Sessions dort. Ein zusaetzliches
-# ExecStop wuerde einen zweiten, parallel laufenden Stop-Pfad erzeugen —
-# waehrend der (sequenziell laufende) ExecStop-Prozess Sessions stoppt,
-# tickt der Hauptprozess unveraendert weiter und kann bereits gestoppte
+# Bewusst KEIN eigenes ExecStop: "controller.sh supervise" fängt TERM
+# selbst ab (Trap) und stoppt alle Sessions dort. Ein zusätzliches
+# ExecStop würde einen zweiten, parallel laufenden Stop-Pfad erzeugen —
+# während der (sequenziell laufende) ExecStop-Prozess Sessions stoppt,
+# tickt der Hauptprozess unverändert weiter und kann bereits gestoppte
 # Sessions wieder hochstarten, da er sein eigenes TERM laut systemd erst
-# NACH Ende von ExecStop bekommt (live bestaetigt, Robustheits-Review
-# 2026-09-24, B2). KillMode=process: Der tmux-Server ist ein eigener,
+# NACH Ende von ExecStop bekommt (live bestätigt). KillMode=process: Der tmux-Server ist ein eigener,
 # sich selbst daemonisierender Prozess (kein Kind dieser Unit) und
-# ueberlebt ohnehin jeden Stop dieser Unit - das ist gewollt, Sessions
-# sollen einen Neustart/Reboot des Controllers ueberstehen (siehe
-# docs/session-lifecycle im knowledge-base-Repo bzw. docs/ARCHITECTURE.md).
-# Ein regulaeres "systemctl stop" beendet Sessions trotzdem sauber, weil
-# der Trap in "supervise" das selbst uebernimmt, solange TimeoutStopSec
-# nicht ueberschritten wird (siehe cmd_stop_all: max. ~10s Wartezeit,
-# unabhaengig von der Session-Anzahl).
+# überlebt ohnehin jeden Stop dieser Unit - das ist gewollt, Sessions
+# sollen einen Neustart/Reboot des Controllers überstehen (siehe
+# docs/ARCHITECTURE.md).
+# Ein reguläres "systemctl stop" beendet Sessions trotzdem sauber, weil
+# der Trap in "supervise" das selbst übernimmt, solange TimeoutStopSec
+# nicht überschritten wird (siehe cmd_stop_all: max. ~10s Wartezeit,
+# unabhängig von der Session-Anzahl).
 KillMode=process
 TimeoutStopSec=30
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env bats
 #
-# Verhaltenstests fuer controller.sh (Bats: https://github.com/bats-core/bats-core).
-# Lokal ausfuehren: bats test/controller.bats
-# Deckt die im Zuge der Reviews vom 2026-09-24/25 gefundenen und gefixten
-# Probleme ab (S1/S2/S4/S5/S6/B1/B6/O4 u.a.) als dauerhafte Regressionstests,
+# Verhaltenstests für controller.sh (Bats: https://github.com/bats-core/bats-core).
+# Lokal ausführen: bats test/controller.bats
+# Deckt zuvor gefundene und gefixte Probleme (Shell-Injection, Backoff,
+# Purge-Leitplanken, resume-Validierung u.a.) als dauerhafte Regressionstests,
 # statt sie nur einmalig manuell nachzustellen.
 #
 # CLAUDE_BIN=/bin/true simuliert die Claude-CLI (echtes tmux wird benutzt,
-# aber ohne echten "claude"-Prozess/Login - fuer die reine Controller-Logik
-# ausreichend). B3 (zwei C-c noetig) ist NICHT abgedeckt, das braucht den
+# aber ohne echten "claude"-Prozess/Login - für die reine Controller-Logik
+# ausreichend). Der Stopp per zwei C-c ist NICHT abgedeckt, das braucht den
 # echten "claude"-Prozess und damit einen eingeloggten Account.
 
 setup() {
@@ -25,13 +25,13 @@ setup() {
 
 teardown() {
     # Falls ein Test einen Hintergrund-"supervise"-Prozess gestartet hat
-    # (PID in supervise.pid abgelegt): IMMER hier abraeumen, nicht inline im
-    # Test - eine fehlschlagende Assertion im Testkoerper (unter Bats'
-    # errexit) bricht die Testfunktion sofort ab und ueberspringt jeden
+    # (PID in supervise.pid abgelegt): IMMER hier abräumen, nicht inline im
+    # Test - eine fehlschlagende Assertion im Testkörper (unter Bats'
+    # errexit) bricht die Testfunktion sofort ab und überspringt jeden
     # inline-Cleanup danach. Ohne diesen Schritt bleibt die "while true"-
-    # Supervisor-Schleife verwaist laufen, und Bats wartet beim naechsten
+    # Supervisor-Schleife verwaist laufen, und Bats wartet beim nächsten
     # Test offenbar auf alle Kindprozesse der Session, bevor es weitermacht -
-    # das ganze Suite-Run haengt dann. Live beobachtet 2026-10-10.
+    # das ganze Suite-Run hängt dann.
     if [[ -f "$TESTDIR/supervise.pid" ]]; then
         local pid; pid="$(cat "$TESTDIR/supervise.pid")"
         kill "$pid" 2>/dev/null || true
@@ -41,12 +41,12 @@ teardown() {
     rm -rf "$TESTDIR"
 }
 
-# --- S1: Shell-Injection ueber den Session-Namen ---
+# --- Shell-Injection über den Session-Namen ---
 
 @test "new rejects shell injection in session name" {
     run "$CTL" new "poc'; touch $TESTDIR/PWNED; echo '"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"ungueltiger Session-Name"* ]]
+    [[ "$output" == *"ungültiger Session-Name"* ]]
     [ ! -f "$TESTDIR/PWNED" ]
 }
 
@@ -57,12 +57,12 @@ teardown() {
     [[ "$output" == *"CamDisplay Schützen"* ]]
 }
 
-# --- B6: rein numerische Namen ---
+# --- Rein numerische Namen ---
 
 @test "new rejects purely numeric session name" {
     run "$CTL" new "2024"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"ungueltiger Session-Name"* ]]
+    [[ "$output" == *"ungültiger Session-Name"* ]]
 }
 
 @test "new accepts a name that mixes letters and digits" {
@@ -87,7 +87,7 @@ teardown() {
     [[ "$output" != *"Kunde A"* ]]
 }
 
-# --- O4: Duplikat-Erkennung ---
+# --- Duplikat-Erkennung ---
 
 @test "duplicate session names: first definition wins, warning logged" {
     mkdir -p "$TESTDIR/projects/demo" "$TESTDIR/projects/demo2"
@@ -102,7 +102,7 @@ EOF
     [ "$count" -eq 1 ]
 }
 
-# --- Robustheit von each_session (urspruenglicher set -e Bug) ---
+# --- Robustheit von each_session (ursprünglicher set -e Bug) ---
 
 @test "a session with missing workdir does not block starting others" {
     cat > "$CLAUDE_CTRL_CONFIG" <<EOF
@@ -114,7 +114,7 @@ EOF
     [[ "$output" == *"[healthy] starte"* ]]
 }
 
-# --- B1: Backoff ---
+# --- Backoff ---
 
 @test "backoff: recent failure blocks immediate retry" {
     mkdir -p "$TESTDIR/projects/demo" "$TESTDIR/state/backoff"
@@ -144,14 +144,14 @@ EOF
 
 # --- Supervisor: sessions.conf pro Tick neu einlesen ---
 #
-# Bewusst KEIN Test ueber "archive" einer laufenden Session: archive stoppt
-# selbst aktiv (2x C-c + Kill-Fallback, siehe stop_one), das wuerde mit dem
+# Bewusst KEIN Test über "archive" einer laufenden Session: archive stoppt
+# selbst aktiv (2x C-c + Kill-Fallback, siehe stop_one), das würde mit dem
 # Supervisor-Tick um dieselbe tmux-Session wettlaufen und den Endzustand
-# zufaellig machen (beim Schreiben entdeckt - der archive-eigene
+# zufällig machen (beim Schreiben entdeckt - der archive-eigene
 # Kill-Fallback kann eine vom Bug neu gestartete Session durch Zufall
-# wieder einholen, was den Test faelschlich gruen macht). Stattdessen eine
-# Transition, die selbst nichts in tmux anfasst: "unarchive" aendert nur
-# die Config-Datei, der Supervisor allein entscheidet ueber den Start.
+# wieder einholen, was den Test fälschlich grün macht). Stattdessen eine
+# Transition, die selbst nichts in tmux anfasst: "unarchive" ändert nur
+# die Config-Datei, der Supervisor allein entscheidet über den Start.
 
 @test "supervise picks up an unarchive from another invocation without needing a restart" {
     mkdir -p "$TESTDIR/projects/demo"
@@ -159,7 +159,7 @@ EOF
     CLAUDE_BIN="/bin/sleep 30" CLAUDE_CTRL_INTERVAL=1 "$CTL" supervise &
     echo "$!" > "$TESTDIR/supervise.pid"
 
-    # Archivierte Session: der Supervisor darf sie ueber mehrere Ticks hinweg
+    # Archivierte Session: der Supervisor darf sie über mehrere Ticks hinweg
     # nie starten.
     sleep 2.5
     ! tmux -S "$TESTDIR/state/tmux.sock" has-session -t "=demo" 2>/dev/null
@@ -167,8 +167,8 @@ EOF
     run "$CTL" unarchive demo
     [ "$status" -eq 0 ]
 
-    # Ohne den Reload-Fix bliebe der laengst laufende Supervisor-Prozess bei
-    # seinem Config-Stand vom eigenen Start (status=archived) und wuerde
+    # Ohne den Reload-Fix bliebe der längst laufende Supervisor-Prozess bei
+    # seinem Config-Stand vom eigenen Start (status=archived) und würde
     # "demo" nie hochfahren.
     local i
     for i in $(seq 1 20); do
@@ -178,7 +178,7 @@ EOF
     tmux -S "$TESTDIR/state/tmux.sock" has-session -t "=demo"
 }
 
-# --- S5: Leitplanken fuer --purge-workdir ---
+# --- Leitplanken für --purge-workdir ---
 
 @test "delete --purge-workdir refuses path outside PROJECTS_BASE_DIR without --force" {
     mkdir -p "$TESTDIR/outside"
@@ -206,13 +206,13 @@ EOF
     [ -d "$fake_home" ]
 }
 
-# --- S4: resume-Validierung ---
+# --- resume-Validierung ---
 
 @test "resume field: shell injection payload is rejected, not executed" {
     mkdir -p "$TESTDIR/projects/demo"
     printf 'demo;%s/projects/demo;$(touch %s/PWNED_RESUME)_evil;;active\n' "$TESTDIR" "$TESTDIR" > "$CLAUDE_CTRL_CONFIG"
     run "$CTL" start
-    [[ "$output" == *"ungueltiger resume-Wert"* ]]
+    [[ "$output" == *"ungültiger resume-Wert"* ]]
     [ ! -f "$TESTDIR/PWNED_RESUME" ]
 }
 
@@ -237,7 +237,7 @@ EOF
     [[ "$output" != *"beschreibbar"* ]]
 }
 
-# --- S6: Verzeichnis-Rechte ---
+# --- Verzeichnis-Rechte ---
 
 @test "state/log/backoff directories are created with mode 700" {
     run "$CTL" list
@@ -246,7 +246,7 @@ EOF
     [ "$(stat -c '%a' "$TESTDIR/state/backoff")" = "700" ]
 }
 
-# --- F1: status --json ---
+# --- status --json ---
 
 @test "status --json produces valid JSON" {
     mkdir -p "$TESTDIR/projects/demo"
@@ -256,7 +256,7 @@ EOF
     echo "$output" | python3 -c "import json,sys; json.load(sys.stdin)"
 }
 
-# --- F8: rename/edit ---
+# --- rename/edit ---
 
 @test "rename updates the config entry" {
     mkdir -p "$TESTDIR/projects/demo"
@@ -293,7 +293,7 @@ EOF
     [ "$status" -ne 0 ]
 }
 
-# --- C1: Semikolon/Zeilenumbruch in Config-Feldern ---
+# --- Semikolon/Zeilenumbruch in Config-Feldern ---
 
 @test "new rejects a semicolon in extra_args and writes nothing" {
     run "$CTL" new semi "" "" "--foo;bar"
@@ -318,7 +318,7 @@ EOF
     [ "$output" = "demo;$TESTDIR/projects/demo;last;;active" ]
 }
 
-# --- C2: delete-Argumente ---
+# --- delete-Argumente ---
 
 @test "delete --force without --purge-workdir is refused, entry kept" {
     run "$CTL" new proja
@@ -344,7 +344,7 @@ EOF
     [ ! -d "$TESTDIR/outside" ]
 }
 
-# --- C6: config_rewrite erhaelt Kommentare ---
+# --- config_rewrite erhält Kommentare ---
 
 @test "rename and archive keep comments and other entries intact" {
     mkdir -p "$TESTDIR/projects/a" "$TESTDIR/projects/b"
@@ -354,15 +354,15 @@ EOF
     run "$CTL" archive 2
     [ "$status" -eq 0 ]
     run cat "$CLAUDE_CTRL_CONFIG"
-    # Leerzeilen werden von "run" nicht zuverlaessig als eigene Eintraege
-    # in $lines abgebildet - daher ueber die Datei direkt vergleichen.
+    # Leerzeilen werden von "run" nicht zuverlässig als eigene Einträge
+    # in $lines abgebildet - daher über die Datei direkt vergleichen.
     [ "$(cat "$CLAUDE_CTRL_CONFIG")" = "$(printf '# Kommentar\naa;%s;;;active\n\nb;%s;last;;archived' "$TESTDIR/projects/a" "$TESTDIR/projects/b")" ]
 }
 
-# --- F9: backup/restore ---
+# --- backup/restore ---
 
-# HOME wird hier bewusst auf ein Fake-Verzeichnis isoliert - sonst wuerde
-# "backup" das ECHTE ~/.claude des Rechners einpacken (langsam, haengt vom
+# HOME wird hier bewusst auf ein Fake-Verzeichnis isoliert - sonst würde
+# "backup" das ECHTE ~/.claude des Rechners einpacken (langsam, hängt vom
 # Host-Zustand ab, potenziell sensible Daten in einem Test-Artefakt).
 @test "backup creates a tar.gz containing sessions.conf" {
     local fake_home="$TESTDIR/fakehome"
