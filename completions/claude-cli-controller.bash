@@ -13,7 +13,7 @@
 _claude_cli_controller() {
     local cur cmd
     cur="${COMP_WORDS[COMP_CWORD]}"
-    local commands="start stop restart status list attach supervise new archive unarchive rename edit delete backup restore"
+    local commands="start stop restart status list attach supervise new archive unarchive rename edit trust delete backup restore"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -22,7 +22,7 @@ _claude_cli_controller() {
 
     cmd="${COMP_WORDS[1]}"
     case "$cmd" in
-        attach|archive|unarchive|rename|edit)
+        attach|archive|unarchive|rename|edit|trust)
             if [[ $COMP_CWORD -eq 2 ]]; then
                 local ctl="${COMP_WORDS[0]}" count
                 count="$("$ctl" list 2>/dev/null | tail -n +2 | wc -l)"
