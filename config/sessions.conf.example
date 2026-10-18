@@ -1,26 +1,25 @@
-# claude-cli-controller: Session-Definitionen
+# claude-cli-controller: session definitions
 #
-# Format (Semikolon-getrennt, kein Semikolon in den Feldern selbst):
+# Format (semicolon-separated, no semicolons inside the fields):
 #   name;workdir;resume;extra_args;status
 #
-# name        eindeutiger tmux-Session-Name. Nur Buchstaben (inkl. Umlaute),
-#             Ziffern, Leerzeichen, "-", "_", max. 64 Zeichen, mindestens ein
-#             Buchstabe (kein rein numerischer Name) - alles andere wird
-#             abgelehnt (siehe docs/SESSIONS.md).
-# workdir     Arbeitsverzeichnis für "claude" (leer = $HOME)
-# resume      leer = neue Session
-#             "last" / "continue" = --continue (letzte Session im workdir fortsetzen)
-#             <session-uuid> = --resume <session-uuid> (nur das UUID-Format
-#             xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx wird akzeptiert, alles
-#             andere wird verworfen und die Session startet ohne --resume)
-# extra_args  zusätzliche CLI-Flags, z.B. --permission-mode acceptEdits
-# status      "active" (Standard, leer = active) oder "archived"
-#             (archivierte Sessions werden bei start/supervise übersprungen)
+# name        unique tmux session name. Letters (including umlauts), digits,
+#             spaces, "-", "_", max. 64 characters, at least one letter
+#             (purely numeric names are rejected) - see docs/SESSIONS.md.
+# workdir     working directory for "claude" (empty = $HOME)
+# resume      empty = new conversation
+#             "last" / "continue" = --continue (continue the last conversation in workdir)
+#             <session-uuid> = --resume <session-uuid> (only the UUID format
+#             xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx is accepted; anything else
+#             is discarded and the session starts without --resume)
+# extra_args  additional CLI flags, e.g. --permission-mode acceptEdits
+# status      "active" (default, empty = active) or "archived"
+#             (archived sessions are skipped by start/supervise)
 #
-# Diese Datei normalerweise nicht von Hand pflegen, sondern über
-# ./controller.sh new / archive / unarchive verwalten.
+# Normally manage this file via ./controller.sh new / archive / unarchive /
+# edit instead of editing it by hand.
 #
-# Zeilen mit "#" oder leere Zeilen werden ignoriert.
+# Lines starting with "#" and empty lines are ignored.
 
 main;/home/<user>/projects/project-a;;;active
 support;/home/<user>/projects/project-b;last;--permission-mode acceptEdits;active

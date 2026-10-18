@@ -1,58 +1,65 @@
-# Setup: LXC-Container + systemd
+# Setup: LXC container + systemd
 
-## Voraussetzungen im Container
+## Prerequisites in the container
 
 ```bash
 sudo apt update
 sudo apt install -y tmux python3
 ```
 
-`python3` wird von `trust_project_dir` (Auto-Trust für neu angelegte
-Projekte, siehe `docs/SESSIONS.md`) benötigt, nicht nur `tmux`.
+`python3` is needed by `trust_project_dir` (auto-trust for newly created
+projects, see `docs/SESSIONS.md`) and by `status --json`, not just `tmux`.
 
-Claude Code CLI muss für den Benutzer installiert und **eingeloggt** sein,
-unter dem der Service läuft (im Folgenden `<user>` genannt — ersetze das
-durchgängig durch den tatsächlichen Benutzernamen):
+The Claude Code CLI must be installed and **logged in** for the user the
+service runs as (called `<user>` below — replace it consistently with the
+actual user name):
 
 ```bash
-# als <user>:
+# as <user>:
 claude login
-# oder alternativ per API-Key statt interaktivem Login (fuer den Service
-# siehe die EnvironmentFile-Variante in Schritt 3 - NICHT einfach
-# "Environment=ANTHROPIC_API_KEY=..." direkt in die Unit schreiben, das
-# waere per "systemctl show" fuer jeden lokalen User auf dem Host lesbar):
+# or, alternatively, an API key instead of an interactive login (for the
+# service, use the EnvironmentFile variant in step 3 - do NOT put
+# "Environment=ANTHROPIC_API_KEY=..." directly into the unit, it would be
+# readable via "systemctl show" by every local user on the host):
 export ANTHROPIC_API_KEY=...
 ```
 
-> Wichtig: Der systemd-Service läuft ohne interaktives Login-Shell. Prüfe,
-> dass `claude` auch **ohne** manuell geladenes `~/.bashrc` funktioniert,
-> z.B. Pfad zu `claude` in `PATH` des Service oder absoluter Pfad via
-> `CLAUDE_BIN` in der Unit-Datei.
+> Important: the systemd service runs without an interactive login shell.
+> Make sure `claude` also works **without** a manually loaded `~/.bashrc`,
+> e.g. by having the path to `claude` in the service's `PATH` or by setting
+> an absolute path via `CLAUDE_BIN` in the unit file.
 
-## 1. Projekt auf den Container bringen
+## 1. Get the project into the container
 
 ```bash
-# z.B. per git clone, scp, oder direkt im Container entwickelt:
+# e.g. via git clone, scp, or developed directly in the container:
 cd /home/<user>/claude-cli-controller
-cp config/sessions.conf.example config/sessions.conf
-$EDITOR config/sessions.conf
 ```
 
-## 2. Manuell testen (bevor systemd übernimmt)
+Then either let `controller.sh new <name>` create `config/sessions.conf` on
+first use (recommended), or start from the example:
+
+```bash
+cp config/sessions.conf.example config/sessions.conf
+$EDITOR config/sessions.conf
+chmod 600 config/sessions.conf   # the file is effectively shell code, see docs/SESSIONS.md
+```
+
+## 2. Test manually (before systemd takes over)
 
 ```bash
 ./controller.sh start
 ./controller.sh status
 ./controller.sh attach main
-# Ctrl-b d zum Lösen (Session bleibt aktiv)
+# Ctrl-b d detaches (the session keeps running)
 ./controller.sh stop
 ```
 
-## 3. systemd-Service installieren
+## 3. Install the systemd service
 
-Die Unit-Datei liegt unter `systemd/claude-cli-controller.service` und
-enthält Platzhalter (`<user>`, Pfad) für Benutzername und Installationspfad
-— vor dem Kopieren durch die tatsächlichen Werte ersetzen, dann:
+The unit file `systemd/claude-cli-controller.service` contains placeholders
+(`<user>`, paths) for the user name and install path — replace them with the
+actual values before copying, then:
 
 ```bash
 sudo cp systemd/claude-cli-controller.service /etc/systemd/system/
@@ -60,12 +67,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now claude-cli-controller.service
 ```
 
-**Nur falls per API-Key statt `claude login` gearbeitet wird:** Die Unit
-liest optional `/etc/claude-cli-controller.env` (`EnvironmentFile=-`,
-schlägt nicht fehl falls die Datei nicht existiert). Datei mit
-eingeschränkten Rechten anlegen, **nicht** den Key direkt als
-`Environment=`-Zeile in die Unit schreiben (sonst per `systemctl show`
-für jeden lokalen User auf dem Host lesbar):
+**Only if you use an API key instead of `claude login`:** the unit
+optionally reads `/etc/claude-cli-controller.env` (`EnvironmentFile=-`, does
+not fail if the file does not exist). Create the file with restricted
+permissions and **do not** write the key directly as an `Environment=` line
+into the unit (it would be readable by every local user via `systemctl
+show`):
 
 ```bash
 sudo install -m 600 -o <user> -g <user> /dev/null /etc/claude-cli-controller.env
@@ -73,54 +80,64 @@ echo 'ANTHROPIC_API_KEY=sk-...' | sudo tee /etc/claude-cli-controller.env >/dev/
 sudo systemctl restart claude-cli-controller.service
 ```
 
-Status/Logs prüfen:
+Check status/logs:
 
 ```bash
 systemctl status claude-cli-controller.service
 journalctl -u claude-cli-controller.service -f
 ```
 
-Der Service ruft `controller.sh supervise` auf: startet beim Boot alle
-Sessions und hält sie danach am Leben (siehe `docs/ARCHITECTURE.md`).
+The service runs `controller.sh supervise`: it starts all sessions at boot
+and keeps them alive afterwards (see `docs/ARCHITECTURE.md`).
 
-## 4. LXC-Autostart sicherstellen
+## 4. Make sure the LXC container autostarts
 
-Der Container selbst muss beim Host-Boot starten (Proxmox/LXC-Konfiguration
-außerhalb dieses Projekts):
+The container itself must start when the host boots (Proxmox/LXC
+configuration outside this project):
 
 ```bash
-# auf dem Proxmox-Host:
+# on the Proxmox host:
 pct set <CTID> -onboot 1
 ```
 
-Sobald der Container bootet, startet systemd innerhalb des Containers den
-`claude-cli-controller.service` automatisch — vorausgesetzt er wurde mit
-`enable` aktiviert (Schritt 3).
+Once the container boots, systemd inside it starts
+`claude-cli-controller.service` automatically — provided it was activated
+with `enable` (step 3).
 
-## 4b. Log-Rotation einrichten (Pflichtschritt für Dauerbetrieb)
+## 5. Set up log rotation (required for permanent operation)
 
-Die pipe-pane-Mitschriften unter `.../logs/*.log` wachsen unbegrenzt (siehe
-`docs/SESSIONS.md`). Fertige Config mitgeliefert (Platzhalter `<user>`
-zuvor ersetzen):
+The `pipe-pane` transcripts under `.../logs/*.log` grow without bound (see
+`docs/SESSIONS.md`). A ready-made config is included (replace the `<user>`
+placeholder first):
 
 ```bash
 sudo cp logrotate/claude-cli-controller.conf /etc/logrotate.d/claude-cli-controller
-sudo sed -i 's#<user>#DEIN-USER#g' /etc/logrotate.d/claude-cli-controller
+sudo sed -i 's#<user>#YOUR-USER#g' /etc/logrotate.d/claude-cli-controller
 ```
 
-## 4c. Bash-Completion (optional)
+## 6. Bash completion (optional)
 
 ```bash
 echo 'source /home/<user>/claude-cli-controller/completions/claude-cli-controller.bash' >> ~/.bashrc
 ```
 
-Vervollständigt Subcommands sowie (per Nummer aus `list`) die Session-
-Referenz für `attach`/`archive`/`unarchive`/`rename`/`edit`/`delete`.
+Completes subcommands and (by number from `list`) the session reference for
+`attach`/`archive`/`unarchive`/`rename`/`edit`/`delete`.
 
-## 5. Nach Config-Änderungen
+## 7. After config changes
+
+A running supervisor re-reads `sessions.conf` on every tick
+(`CLAUDE_CTRL_INTERVAL`, default 15s): new, archived and unarchived sessions
+are picked up automatically, no service restart is needed.
+
+Changes to a session that is **already running** (`edit`, or manual edits of
+its line) only apply the next time that session starts, because running
+sessions are never restarted implicitly:
 
 ```bash
-sudo systemctl restart claude-cli-controller.service
-# oder ohne systemd-Neustart, nur neue/geänderte Sessions:
-./controller.sh start
+./controller.sh stop      # or archive/unarchive as needed
+./controller.sh start     # or: sudo systemctl restart claude-cli-controller.service
 ```
+
+Changes to the unit file or environment file need
+`sudo systemctl daemon-reload && sudo systemctl restart claude-cli-controller.service`.
