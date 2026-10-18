@@ -1,58 +1,78 @@
-# Architektur
+# Architecture
 
-## Überblick
+## Overview
 
 ```
-LXC-Container (Boot)
+LXC container (boot)
    └── systemd: claude-cli-controller.service
           └── controller.sh supervise
-                 ├── tmux (Socket: ~/.local/state/claude-cli-controller/tmux.sock)
-                 │      ├── Session "main"    -> claude (cwd: project-a)
-                 │      ├── Session "support" -> claude --continue (cwd: project-b)
-                 │      └── Session "sandbox" -> claude (cwd: scratch)
-                 └── Watchdog-Loop (alle N Sekunden: fehlende Sessions neu starten)
+                 ├── tmux (socket: ~/.local/state/claude-cli-controller/tmux.sock)
+                 │      ├── session "main"    -> claude (cwd: project-a)
+                 │      ├── session "support" -> claude --continue (cwd: project-b)
+                 │      └── session "sandbox" -> claude (cwd: scratch)
+                 └── watchdog loop (every N seconds: restart missing sessions,
+                                    write readable snapshots)
 ```
 
-## Warum tmux?
+## Why tmux?
 
-Claude Code ist primär eine interaktive REPL. Damit Sessions nach dem
-Container-Boot ohne angemeldeten Benutzer weiterlaufen und trotzdem später
-per SSH betretbar sind, läuft jede Session in einer eigenen **detached
-tmux-Session**:
+Claude Code is primarily an interactive REPL. So that sessions keep running
+after the container boots without a logged-in user, and can still be entered
+later via SSH, each session runs in its own **detached tmux session**:
 
-- Session bleibt aktiv, auch wenn niemand verbunden ist.
-- Mehrere Personen/Tools können sich unabhängig per `tmux attach` anklinken.
-- Ein eigener tmux-Socket (`tmux -S <sock>`) trennt die Controller-Sessions
-  vom persönlichen `tmux` des Benutzers, falls dieser das Terminal auch
-  interaktiv nutzt.
+- The session stays alive even if nobody is connected.
+- Several people/tools can attach independently with `tmux attach`.
+- A dedicated tmux socket (`tmux -S <sock>`) separates the controller's
+  sessions from the user's personal `tmux`, in case they also use it
+  interactively.
 
-## Warum ein eigener Watchdog statt nur `Restart=on-failure`?
+## Why a custom watchdog instead of just `Restart=on-failure`?
 
-`systemd` überwacht nur den Hauptprozess des Service (`controller.sh
-supervise`), nicht die einzelnen tmux-Panes/Claude-Prozesse darin. Stürzt
-eine einzelne Claude-Session ab, würde systemd das nicht bemerken. Der
-Supervisor-Loop in `controller.sh` prüft daher periodisch jede konfigurierte
-Session und startet sie bei Bedarf neu — der systemd-Restart greift nur,
-falls der Controller-Prozess selbst abstürzt.
+`systemd` only watches the service's main process (`controller.sh
+supervise`), not the individual tmux panes/Claude processes inside it. If a
+single Claude session crashes, systemd would not notice. The supervisor loop
+in `controller.sh` therefore checks every configured session periodically
+and restarts it if needed — the systemd restart only applies if the
+controller process itself crashes.
 
-## Komponenten
+The supervisor re-reads `sessions.conf` on every tick, so `new`, `archive`,
+`unarchive` and `edit` take effect without restarting the service.
 
-| Datei/Verzeichnis                          | Zweck                                      |
-|---------------------------------------------|---------------------------------------------|
-| `controller.sh`                             | Start/Stop/Status/Supervise-Logik           |
-| `config/sessions.conf`                      | Welche Sessions mit welchen Optionen laufen |
-| `systemd/claude-cli-controller.service`     | Autostart-Definition für den Container      |
-| `logrotate/claude-cli-controller.conf`      | Log-Rotation für `.../logs/*.log`           |
-| `completions/claude-cli-controller.bash`    | Bash-Completion (optional)                  |
-| `test/controller.bats`, `.github/workflows/ci.yml` | Regressionstests + CI (shellcheck + bats + gitleaks) |
-| `~/.local/state/claude-cli-controller/`     | Laufzeitdaten: tmux-Socket, `logs/` (Mitschrift + Snapshot je Session), `backoff/` (Fehlversuche pro Session), `backups/` (Default-Ziel von `controller.sh backup`) |
+## Behavior worth knowing
 
-## Nicht-Ziele (bewusst weggelassen)
+- **Backoff**: a session that keeps failing to start is retried with growing
+  pauses (15s → … → 15min) instead of every tick; state lives in
+  `backoff/<name>` (see `docs/SESSIONS.md`).
+- **Remote Control**: sessions start with `--remote-control <name>` so they
+  show up in the Remote Control / fleet overview (`CLAUDE_CTRL_REMOTE_CONTROL=0` disables it).
+- **Auto-trust**: directories created by `new` are marked as trusted in
+  `~/.claude.json`, so an unattended session does not hang at the trust
+  prompt (`CLAUDE_CTRL_AUTO_TRUST=0` disables it).
+- **Logs & snapshots**: the full raw pane output goes to `logs/<name>.log`
+  (`tmux pipe-pane`); the supervisor additionally overwrites a readable
+  `logs/<name>.snapshot.txt` on every tick.
+- **Shutdown**: `supervise` traps TERM/INT and stops all sessions in
+  parallel (two Ctrl-C within ~1s, then `kill-session` after at most ~10s).
+  The unit therefore has no `ExecStop`.
 
-- Kein eigenes Auth-/Secrets-Management: Claude Code nutzt die reguläre
-  Login-Session (`~/.claude/`) bzw. `ANTHROPIC_API_KEY` des Benutzers, unter
-  dem der Service läuft.
-- Keine Web-UI/API — Zugriff erfolgt über SSH + `tmux attach` bzw.
+## Components
+
+| File/directory | Purpose |
+|----------------|---------|
+| `controller.sh` | Start/stop/status/supervise logic and session management |
+| `config/sessions.conf` | Which sessions run with which options (created from `config/sessions.conf.example` or by `new`) |
+| `systemd/claude-cli-controller.service` | Autostart definition for the container |
+| `logrotate/claude-cli-controller.conf` | Log rotation for `.../logs/*.log` |
+| `completions/claude-cli-controller.bash` | Bash completion (optional) |
+| `test/controller.bats`, `.github/workflows/ci.yml` | Regression tests + CI (shellcheck + bats + gitleaks) |
+| `docs/` | This documentation |
+| `~/.local/state/claude-cli-controller/` | Runtime data: tmux socket, `logs/` (transcript + snapshot per session), `backoff/` (failed attempts per session), `backups/` (default target of `controller.sh backup`) |
+
+## Non-goals (deliberately left out)
+
+- No own auth/secrets management: Claude Code uses the regular login session
+  (`~/.claude/`) or the `ANTHROPIC_API_KEY` of the user the service runs as.
+- No web UI/API — access is via SSH + `tmux attach` or
   `controller.sh status/attach`.
-- Keine Multi-Host-Orchestrierung — der Controller verwaltet Sessions nur
-  innerhalb eines einzelnen LXC-Containers.
+- No multi-host orchestration — the controller manages sessions within a
+  single LXC container only.

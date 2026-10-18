@@ -1,62 +1,83 @@
-# Sessions & Projekte verwalten
+# Managing sessions & projects
 
-## Neues Projekt anlegen (empfohlener Weg)
+Note: messages printed by `controller.sh` are in German; they are quoted
+as-is below.
+
+## Creating a new project (recommended)
 
 ```bash
 ./controller.sh new <name> [workdir] [resume] [extra_args]
 ```
 
-Das erledigt in einem Schritt:
+This does the following in one step:
 
-1. Legt `workdir` an (Standard: `$CLAUDE_CTRL_PROJECTS_DIR/<name>`, per
-   Default `~/projects/<name>`), falls es noch nicht existiert.
-2. Trägt die Session in `config/sessions.conf` ein (Status `active`).
-3. Startet die Session sofort in tmux.
+1. Creates `workdir` (default: `$CLAUDE_CTRL_PROJECTS_DIR/<name>`, i.e.
+   `~/projects/<name>`) if it does not exist yet.
+2. Registers the session in `config/sessions.conf` (status `active`),
+   creating the file if necessary.
+3. Starts the session in tmux right away.
 
-Jede gestartete Session läuft mit `--remote-control <name>`, damit sie in
-der Remote-Control-/Fleet-Übersicht (z.B. `claude.ai/code`, andere lokale
-Sessions via `ListAgents`) sichtbar und von dort aus bedienbar ist.
-Abschaltbar per `CLAUDE_CTRL_REMOTE_CONTROL=0`.
+Every started session runs with `--remote-control <name>`, so it shows up in
+the Remote Control / fleet overview (e.g. `claude.ai/code`, other local
+sessions via `ListAgents`) and can be operated from there. Disable with
+`CLAUDE_CTRL_REMOTE_CONTROL=0`.
 
-Wird `resume` weggelassen, setzt `new` automatisch `last` (`--continue`),
-damit die Session auch einen Container-/Host-Neustart übersteht, ohne den
-Gesprächskontext zu verlieren (siehe `docs/TROUBLESHOOTING.md`, Abschnitt
-"Nach Neustart verbindet sich die Desktop App zu einer neuen, leeren
-Session"). Wer stattdessen bei jedem Start bewusst eine leere Session will
-(z.B. ein Sandbox-Projekt), muss `resume` explizit als leeren String
-übergeben (dritter Parameter `""`, nicht weglassen).
+If `resume` is omitted, `new` sets `last` (`--continue`), so the session
+survives a container/host restart without losing its conversation context
+(see `docs/TROUBLESHOOTING.md`, "After a restart the desktop app connects to
+a new, empty session"). If you deliberately want an empty session on every
+start (e.g. a sandbox project), pass `resume` explicitly as an empty string
+(third parameter `""`, do not omit it).
 
-Der allererste Start durch `new` läuft dabei immer **ohne** `--continue`,
-unabhängig vom `resume`-Wert: `workdir` wurde gerade erst angelegt, es gibt
-also noch keine Konversation, und `claude --continue` bricht ohne
-vorhandene Konversation mit `"No conversation found to continue"` sofort ab
-statt neu zu starten. In `sessions.conf` wird trotzdem `last` hinterlegt,
-sodass ab dem zweiten Start (Restart/Reboot) — wenn dank des Erststarts
-bereits eine Konversation existiert — normal fortgesetzt wird.
+The very first start by `new` always runs **without** `--continue`,
+regardless of the `resume` value: `workdir` was just created, so there is
+no conversation yet, and `claude --continue` aborts immediately with `"No
+conversation found to continue"` instead of starting fresh. `last` is
+still stored in `sessions.conf`, so from the second start on (restart/reboot)
+— when the first start has created a conversation — the session continues
+normally.
 
-`new` markiert das Verzeichnis dabei automatisch in `~/.claude.json` als
-vertrauenswürdig (`hasTrustDialogAccepted=true`). Ohne das würde `claude`
-in der unbeaufsichtigten tmux-Session am interaktiven Trust-Prompt hängen,
-da niemand da ist, um ihn zu bestätigen. Das gilt nur für Verzeichnisse, die
-`controller.sh` selbst anlegt — abschaltbar per `CLAUDE_CTRL_AUTO_TRUST=0`
-(dann muss der Trust-Dialog einmalig per `controller.sh attach` manuell
-bestätigt werden).
+`new` also marks the directory as trusted in `~/.claude.json`
+(`hasTrustDialogAccepted=true`). Without this, `claude` would hang at the
+interactive trust prompt in the unattended tmux session, since nobody is
+there to confirm it. This only applies to directories that `controller.sh`
+creates itself — for an already existing directory the dialog is not
+bypassed automatically; either confirm it once via `controller.sh attach`
+or run `./controller.sh trust <nr|name>` (explicit, works regardless of
+`CLAUDE_CTRL_AUTO_TRUST`; takes effect on the next start of a session that
+is already running). Disable
+auto-trust entirely with `CLAUDE_CTRL_AUTO_TRUST=0`.
 
-Beispiele:
+`trust` stores the symlink-resolved (`realpath`) path of the workdir, while
+`new` stores the path exactly as given. If the workdir is (or lies behind) a
+symlink, the entry may not match the path `claude` looks up; in that case
+confirm the dialog once via `controller.sh attach`.
+
+`new` and `trust` modify `~/.claude.json` with a read-modify-write of the
+whole file, while running `claude` processes update the same file. If a
+session writes at the very same moment, one of the two changes can be lost.
+If a session still shows the trust dialog after `trust`, simply run `trust`
+again.
+
+`workdir`, `resume` and `extra_args` must not contain a semicolon or a line
+break (they would corrupt the `sessions.conf` line); `new` and `edit`
+reject such values.
+
+Examples:
 
 ```bash
-# einfachstes Projekt, Verzeichnis wird automatisch unter ~/projects/kunde-a angelegt
-# resume wird weggelassen -> automatisch "last" (übersteht Neustarts)
-./controller.sh new kunde-a
+# simplest project, the directory is created automatically as ~/projects/customer-a
+# resume omitted -> automatically "last" (survives restarts)
+./controller.sh new customer-a
 
-# eigenes Arbeitsverzeichnis vorgeben
-./controller.sh new kunde-b /srv/repos/kunde-b
+# specify your own working directory
+./controller.sh new customer-b /srv/repos/customer-b
 
-# mit Zusatz-Flags, resume explizit leer -> startet bei jedem Neustart neu (z.B. Sandbox)
-./controller.sh new kunde-c "" "" "--permission-mode acceptEdits"
+# with extra flags, resume explicitly empty -> starts fresh on every restart (e.g. sandbox)
+./controller.sh new customer-c "" "" "--permission-mode acceptEdits"
 ```
 
-## Sessions auflisten (nummeriert)
+## Listing sessions (numbered)
 
 ```bash
 ./controller.sh list
@@ -66,116 +87,114 @@ Beispiele:
 Nr  Status    Läuft    Name                 Workdir
 1   active    running  main                 /home/<user>/projects/project-a
 2   active    stopped  support              /home/<user>/projects/project-b
-3   archived  stopped  altprojekt           /home/<user>/projects/altprojekt
+3   archived  stopped  oldproject           /home/<user>/projects/oldproject
 ```
 
-Die Nummer bezieht sich auf die Reihenfolge in `sessions.conf` (Kommentare
-zählen nicht mit) und kann überall dort verwendet werden, wo auch ein Name
-erwartet wird: `attach`, `archive`, `unarchive`, `rename`, `edit`, `delete`.
+The number refers to the order in `sessions.conf` (comments do not count)
+and can be used wherever a name is expected: `attach`, `archive`,
+`unarchive`, `rename`, `edit`, `trust`, `delete`.
 
-## Session archivieren
+## Archiving a session
 
-Stoppt die Session und markiert sie in der Config als `archived`, sodass sie
-bei `start`/`supervise` (und damit auch nach einem Container-Neustart) nicht
-mehr automatisch gestartet wird. Der Eintrag bleibt erhalten.
+Stops the session and marks it `archived` in the config, so it is no longer
+started automatically by `start`/`supervise` (and therefore not after a
+container restart either). The entry is kept.
 
 ```bash
-./controller.sh list            # Nummer nachsehen
-./controller.sh archive 3       # per Nummer
-./controller.sh archive altprojekt   # oder per Name
+./controller.sh list            # look up the number
+./controller.sh archive 3       # by number
+./controller.sh archive oldproject   # or by name
 ```
 
-Wird `status` stattdessen von Hand in `sessions.conf` auf `archived`
-gesetzt (statt über diesen Befehl), wird eine noch laufende Session
-**nicht** automatisch gestoppt — nur bei jedem `start`/`supervise`-Tick als
-Warnung geloggt (`... ist als 'archived' markiert, läuft aber noch`).
-Bewusst kein automatischer Zwangs-Stopp, um nicht durch einen bloßen
-Tippfehler beim Editieren eine gerade aktiv genutzte Session zu beenden —
-zum tatsächlichen Stoppen weiterhin `controller.sh archive` verwenden.
+If `status` is set to `archived` by hand in `sessions.conf` (instead of via
+this command), a session that is still running is **not** stopped
+automatically — a warning is logged on every `start`/`supervise` tick
+(`... ist als 'archived' markiert, läuft aber noch`). This is deliberate: a
+mere typo while editing must not terminate a session that is in active use.
+To actually stop it, keep using `controller.sh archive`.
 
-## Session reaktivieren
+## Re-activating a session
 
 ```bash
 ./controller.sh unarchive 3
-./controller.sh start           # danach explizit wieder starten
+./controller.sh start           # then start it explicitly
 ```
 
-## Format von `config/sessions.conf`
+(A running supervisor starts it on its next tick anyway.)
 
-Wird normalerweise nicht von Hand gepflegt (siehe `new`/`archive` oben),
-aber zur Referenz:
+## Format of `config/sessions.conf`
+
+Normally not maintained by hand (see `new`/`archive` above), but for
+reference:
 
 ```
 name;workdir;resume;extra_args;status
 ```
 
-| Feld         | Bedeutung                                                                 |
-|--------------|-----------------------------------------------------------------------------|
-| `name`       | Eindeutiger tmux-Session-Name. Erlaubt: Buchstaben (inkl. Umlaute), Ziffern, Leerzeichen, `-`, `_`, max. 64 Zeichen, **mindestens ein Buchstabe** — `controller.sh new` lehnt alles andere ab, und Zeilen mit ungültigem Namen werden beim Einlesen übersprungen (siehe unten). Ein rein numerischer Name (z.B. `"2024"`) ist bewusst nicht erlaubt: `archive`/`unarchive`/`attach`/`delete` interpretieren eine Zahl immer als Listenindex aus `list`, nie als Namen — ein solcher Name wäre also nie per Namen ansprechbar gewesen |
-| `workdir`    | Arbeitsverzeichnis, in dem `claude` gestartet wird. Leer = `$HOME`          |
-| `resume`     | Leer = neue Session · `last`/`continue` = `--continue` · sonst = `--resume <uuid>` — nur eine Session-UUID im Format `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` wird akzeptiert und sauber gequotet, alles andere wird verworfen (Session startet dann ohne `--resume`, siehe Sicherheitshinweis unten) |
-| `extra_args` | Zusätzliche CLI-Flags, z.B. `--permission-mode acceptEdits`                |
-| `status`     | `active` (Standard, leer = active) oder `archived`                        |
+| Field | Meaning |
+|-------|---------|
+| `name` | Unique tmux session name. Allowed: letters (including umlauts), digits, spaces, `-`, `_`, max. 64 characters, **at least one letter**. `controller.sh new` rejects anything else, and lines with an invalid name are skipped when the file is read. A purely numeric name (e.g. `"2024"`) is deliberately not allowed: `archive`/`unarchive`/`attach`/`delete` always interpret a number as a list index from `list`, never as a name — such a name could never have been addressed by name |
+| `workdir` | Working directory in which `claude` is started. Empty = `$HOME` |
+| `resume` | Empty = new session · `last`/`continue` = `--continue` · otherwise = `--resume <uuid>` — only a session UUID of the form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` is accepted and properly quoted; anything else is discarded (the session then starts without `--resume`, see the security note below) |
+| `extra_args` | Additional CLI flags, e.g. `--permission-mode acceptEdits` |
+| `status` | `active` (default, empty = active) or `archived` |
 
-Kommentarzeilen beginnen mit `#`, leere Zeilen werden ignoriert. Kein
-Semikolon in den Feldern selbst (zerschießt die Feld-Ausrichtung). Taucht
-derselbe Name mehrfach auf (z.B. durch manuelles Bearbeiten), gilt die
-erste Definition, alle weiteren werden mit einer Warnung übersprungen.
+Comment lines start with `#`, empty lines are ignored. No semicolons inside
+the fields. If the same name appears more than once (e.g. through manual
+editing), the first definition wins and all further ones are skipped with a
+warning.
 
-**Sicherheitshinweis:** `extra_args` landet unquotiert in dem
-Kommandostring, den `tmux new-session` als Shell-Befehl ausführt — dieses
-Feld ist also effektiv Shell-Code, dort gehören nur vertrauenswürdige,
-selbst gepflegte Werte hinein, keine Eingaben aus nicht vertrauenswürdigen
-Quellen. `name` (Zeichen-Allowlist, siehe oben) und seit 2026-09-25 auch
-`resume` (nur `last`/`continue`/UUID, alles andere wird verworfen) sind
-dagegen validiert und sauber gequotet — `name` u.a. deshalb, weil er auch
-in `pipe-pane` (Log-Datei) und als `--remote-control`-Argument verwendet
-wird; ohne die Allowlist ließe sich darüber Shell-Code einschleusen, der
-beim Enden der jeweiligen Session ausgeführt wird (Details/PoC:
-Security-Review 2026-09-24).
+**Security note:** `extra_args` ends up unquoted in the command string that
+`tmux new-session` executes as a shell command — this field is effectively
+shell code, so only trusted, self-maintained values belong there, never
+input from untrusted sources. `name` (character allowlist, see above) and
+`resume` (only `last`/`continue`/UUID, anything else is discarded) are
+validated and properly quoted — `name` among other things because it is also
+used in `pipe-pane` (log file) and as the `--remote-control` argument;
+without the allowlist, shell code could be injected through it that would
+run when the respective session ends.
 
-Zusätzlich warnt `controller.sh` bei jedem Aufruf, falls `sessions.conf`
-für andere lokale User beschreibbar ist (`chmod 600` empfohlen) — wer
-diese Datei schreiben kann, kann darüber effektiv beliebigen Shell-Code
-in jeder Session ausführen lassen.
+In addition, `controller.sh` warns on every invocation if `sessions.conf`
+is writable by other local users (`chmod 600` recommended) — whoever can
+write that file can effectively run arbitrary shell code in every session.
 
-## Sessions bedienen
+## Operating sessions
 
 ```bash
-./controller.sh status          # Übersicht: running/stopped (alle Sessions)
-./controller.sh status --json   # dieselbe Übersicht maschinenlesbar (z.B. Monitoring)
-./controller.sh list            # wie status, aber nummeriert + inkl. archived
-./controller.sh attach main     # anhängen (per Name oder Nummer aus "list")
-# in tmux: Ctrl-b d              # lösen, Session läuft weiter
-./controller.sh stop            # alle stoppen (SIGINT, danach kill falls nötig)
+./controller.sh status          # overview: running/stopped (all sessions)
+./controller.sh status --json   # the same overview, machine-readable (e.g. monitoring)
+./controller.sh list            # like status, but numbered + including archived
+./controller.sh attach main     # attach (by name or number from "list")
+# in tmux: Ctrl-b d              # detach, the session keeps running
+./controller.sh stop            # stop all (SIGINT, then kill if necessary)
 ```
 
-`status --json` liefert pro Session `name`, `status`, `running`,
-`workdir`, `fail_count` und `last_attempt_epoch` (die beiden letzten aus
-dem Backoff-Zustand, siehe unten — `fail_count` zählt Fehlversuche **in
-Folge seit dem letzten Erfolg**, keine Lifetime-Neustartzahl).
+`status --json` returns `name`, `status`, `running`, `workdir`,
+`fail_count` and `last_attempt_epoch` per session (the last two come from
+the backoff state, see below — `fail_count` counts failed attempts **in a
+row since the last success**, not a lifetime restart count).
 
-`stop`/`archive`/`delete` schicken automatisch **zwei** `C-c` im Abstand
-von 0,3s: Claude Code beendet sich nicht nach einem einzelnen Ctrl-C
-(zeigt nur „Press Ctrl-C again to exit" an und braucht das zweite
-innerhalb von ~1s, sonst setzt sich die Anzeige zurück). Wer manuell per
-`attach` in einer hängenden Session eingreift, muss das ebenfalls
-beachten — ein einzelnes Ctrl-C reicht dort nicht.
+`stop`/`archive`/`delete` automatically send **two** `C-c` 0.3s apart:
+Claude Code does not exit after a single Ctrl-C (it only shows "Press
+Ctrl-C again to exit" and needs the second one within ~1s, otherwise the
+prompt resets). If you intervene manually via `attach` in a hanging
+session, you must keep this in mind too — a single Ctrl-C is not enough
+there.
 
-## Session umbenennen / Config-Felder ändern
+## Renaming a session / changing config fields
 
 ```bash
-./controller.sh rename 3 neuer-name
-./controller.sh edit 3 --workdir /srv/repos/kunde-b
+./controller.sh rename 3 new-name
+./controller.sh edit 3 --workdir /srv/repos/customer-b
 ./controller.sh edit 3 --resume last --extra-args "--permission-mode acceptEdits"
 ```
 
-`rename` funktioniert auch bei einer laufenden Session (benennt die
-tmux-Session und die Log-/Snapshot-Dateien mit um, ohne Datenverlust).
-`edit` ändert nur die angegebenen Felder und wirkt — wie `unarchive` —
-erst beim nächsten Start dieser Session, nicht sofort auf eine laufende.
+`rename` also works for a running session (it renames the tmux session and
+the log/snapshot files, without data loss). `edit` only changes the fields
+given and — like `unarchive` — takes effect only the next time that session
+starts, not immediately on a running one.
 
-Direkt mit tmux (gleicher Socket wie der Controller):
+Directly with tmux (same socket as the controller):
 
 ```bash
 tmux -S ~/.local/state/claude-cli-controller/tmux.sock list-sessions
@@ -184,84 +203,88 @@ tmux -S ~/.local/state/claude-cli-controller/tmux.sock attach -t main
 
 ## Logs
 
-Jede Session pipet ihre tmux-Pane-Ausgabe zusätzlich in eine Log-Datei:
+Each session additionally pipes its tmux pane output into a log file:
 
 ```
 ~/.local/state/claude-cli-controller/logs/<name>.log
 ```
 
-Diese Datei ist die vollständige Mitschrift, roh inklusive ANSI-
-Escape-Codes (kaum von Hand lesbar) — wächst unbegrenzt, für Dauerbetrieb
-`logrotate` einrichten (siehe `docs/TROUBLESHOOTING.md`).
+This file is the complete transcript, raw including ANSI escape codes
+(hardly readable by hand) — it grows without bound, so set up `logrotate`
+for permanent operation (see `docs/SETUP.md`, step 5).
 
-Zusätzlich schreibt der Supervisor bei jedem Tick (`SUPERVISE_INTERVAL`,
-Default 15s) für jede laufende Session einen lesbaren Klartext-
-Schnappschuss des aktuell sichtbaren Pane-Inhalts:
+In addition, the supervisor writes a readable plain-text snapshot of the
+currently visible pane content for every running session on each tick
+(`CLAUDE_CTRL_INTERVAL`, default 15s):
 
 ```
 ~/.local/state/claude-cli-controller/logs/<name>.snapshot.txt
 ```
 
-Diese Datei wird bei jedem Tick überschrieben (kein Anhängen, keine
-Rotation nötig) — gedacht für einen schnellen Blick ("was macht diese
-Session gerade"), nicht als vollständiges Protokoll: Ausgaben zwischen
-zwei Ticks können fehlen (tmux-Scrollback-Limit). Für lückenlose
-Nachvollziehbarkeit (z.B. "warum ist diese Session wiederholt
-gescheitert", siehe Backoff unten) bleibt `<name>.log` die maßgebliche
-Quelle.
+This file is overwritten on every tick (no appending, no rotation needed) —
+meant for a quick look ("what is this session doing right now"), not as a
+complete record: output between two ticks can be missing (tmux scrollback
+limit). For gapless traceability (e.g. "why did this session fail
+repeatedly", see backoff below), `<name>.log` remains the authoritative
+source.
 
-## Session dauerhaft entfernen
+## Removing a session permanently
 
-Archivieren (siehe oben) reicht in der Regel aus. Soll der Eintrag komplett
-verschwinden (nicht nur archiviert bleiben):
+Archiving (see above) is usually enough. If the entry should disappear
+completely (not just stay archived):
 
 ```bash
-./controller.sh delete 3              # stoppt + entfernt aus sessions.conf
-./controller.sh delete altprojekt --purge-workdir   # zusätzlich Arbeitsverzeichnis löschen
+./controller.sh delete 3              # stops + removes from sessions.conf
+./controller.sh delete oldproject --purge-workdir   # additionally delete the working directory
 ```
 
-Ohne `--purge-workdir` bleibt das Arbeitsverzeichnis (Projektdateien,
-Konversationsverlauf) erhalten, nur der Controller-Eintrag verschwindet.
-Mit `--purge-workdir` wird das Verzeichnis unwiderruflich per `rm -rf`
-gelöscht — vor allem für Wegwerf-/Test-Sessions gedacht, nicht für Projekte
-mit echtem Inhalt.
+Without `--purge-workdir`, the working directory (project files,
+conversation history) is kept; only the controller entry disappears. With
+`--purge-workdir` the directory is irrevocably deleted via `rm -rf` — meant
+mainly for throwaway/test sessions, not for projects with real content.
 
-**Leitplanken:** Liegt das Workdir außerhalb von `PROJECTS_BASE_DIR`
-(Default `~/projects`) — z.B. ein per `new <name> <eigener-pfad>` bewusst
-extern angelegtes Projekt — verlangt `--purge-workdir` zusätzlich
+**Guard rails:** If the workdir is outside `CLAUDE_CTRL_PROJECTS_DIR`
+(default `~/projects`) — e.g. a project deliberately created externally via
+`new <name> <own-path>` — `--purge-workdir` additionally requires
 `--force`:
+
 ```bash
-./controller.sh delete kunde-b --purge-workdir --force
+./controller.sh delete customer-b --purge-workdir --force
 ```
-`/` und `$HOME` werden immer verweigert, auch mit `--force`. Das schützt
-vor einem Tippfehler im `workdir`-Feld von `sessions.conf` (z.B.
-`/home/user` statt `/home/user/x`), der sonst unwiderruflich per `rm -rf`
-ausgeführt würde.
 
-## Backoff bei wiederholt fehlschlagenden Sessions
+`--force` without `--purge-workdir`, as well as unknown options, are
+rejected. `/` and `$HOME` are always refused, even with `--force`. This
+protects against a typo in the `workdir` field of `sessions.conf` (e.g.
+`/home/user` instead of `/home/user/x`) that would otherwise be executed
+irrevocably via `rm -rf`.
 
-Scheitert eine Session beim Start dauerhaft (z.B. `--continue` ohne
-vorhandene Konversation, siehe oben), versucht `start`/`supervise` es
-nicht mehr bei jedem Intervall erneut, sondern mit steigenden Pausen:
-15s → 30s → 60s → 120s → 300s → 900s (danach konstant alle 15min). Ab 5
-Fehlversuchen in Folge erscheint die Session in `status`/`list` mit einem
-`[failed: N Versuche, zuletzt vor Xs]`-Hinweis. Sobald ein Start
-erfolgreich bleibt (Session existiert beim nächsten Intervall noch),
-wird der Zähler zurückgesetzt. Zustand pro Session:
+## Backoff for repeatedly failing sessions
+
+If a session keeps failing at startup (e.g. `--continue` without an
+existing conversation, see above), `start`/`supervise` no longer retries on
+every interval but with growing pauses: 15s → 30s → 60s → 120s → 300s →
+900s (constant every 15min afterwards). From 5 failed attempts in a row on,
+the session appears in `status`/`list` with a `[failed: N Versuche, zuletzt
+vor Xs]` note. As soon as a start stays successful (the session still exists
+at the next interval), the counter is reset. State per session:
 `$STATE_DIR/backoff/<name>`.
 
-## Backup & Restore
+## Backup & restore
 
 ```bash
-./controller.sh backup                          # Default-Ziel: $STATE_DIR/backups/claude-backup-<datum>.tar.gz
-./controller.sh backup /pfad/mein-backup.tar.gz  # eigenes Ziel
+./controller.sh backup                          # default target: $STATE_DIR/backups/claude-backup-<date>.tar.gz
+./controller.sh backup /path/my-backup.tar.gz   # custom target
 
-./controller.sh restore /pfad/mein-backup.tar.gz --force
+./controller.sh restore /path/my-backup.tar.gz --force
 ```
 
-`backup` sichert `config/sessions.conf`, `~/.claude.json` (Trust-Zustand)
-und `~/.claude/` (Session-Transkripte, Settings) als `tar.gz` — gedacht
-für eine schnelle Wiederherstellung nach einem Container-Neuaufbau.
-`restore` überschreibt den aktuellen Stand vollständig und verlangt
-deshalb `--force`; laufende Sessions vorher mit `controller.sh stop`
-beenden, sonst kann der Zustand inkonsistent werden.
+`backup` saves `config/sessions.conf`, `~/.claude.json` (trust state) and
+`~/.claude/` (session transcripts, settings) as a `tar.gz` — intended for a
+quick recovery after rebuilding the container. `restore` overwrites the
+current state completely and therefore requires `--force`; stop running
+sessions with `controller.sh stop` first, otherwise the state can become
+inconsistent.
+
+## Environment variables
+
+See the table in the [README](../README.md#configuration-environment-variables).

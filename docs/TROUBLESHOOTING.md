@@ -1,117 +1,129 @@
 # Troubleshooting
 
-## Service startet, aber keine Session läuft
+Note: messages printed by `controller.sh` are in German; they are quoted
+as-is below.
+
+## Service starts, but no session is running
 
 ```bash
 journalctl -u claude-cli-controller.service -e
 ```
 
-Häufige Ursachen:
+Common causes:
 
-- `claude` nicht im `PATH` des Service-Environments. Fix: absoluten Pfad in
-  `CLAUDE_BIN` setzen (Environment-Zeile in der `.service`-Datei) oder
-  `PATH=` explizit in der Unit ergänzen.
-- `tmux` nicht installiert (`sudo apt install tmux`).
-- `workdir` aus `sessions.conf` existiert nicht → Fehler in den Logs unter
-  `~/.local/state/claude-cli-controller/logs/`.
+- `claude` is not in the `PATH` of the service environment. Fix: set an
+  absolute path in `CLAUDE_BIN` (an `Environment=` line in the `.service`
+  file) or add `PATH=` explicitly in the unit.
+- `tmux` is not installed (`sudo apt install tmux`).
+- The `workdir` from `sessions.conf` does not exist (`Arbeitsverzeichnis
+  fehlt` in the journal) → the session is retried with backoff, see
+  `docs/SESSIONS.md`.
 
-## "claude: command not found" nur unter systemd, manuell funktioniert es
+## "claude: command not found" only under systemd, works manually
 
-systemd-Services erben nicht automatisch `~/.bashrc`/`~/.profile`. Prüfen wo
-`claude` liegt (`which claude` als `<user>`) und den Pfad explizit in der
-Unit setzen, z.B.:
+systemd services do not inherit `~/.bashrc`/`~/.profile`. Find where
+`claude` lives (`which claude` as `<user>`) and set the path explicitly in
+the unit, e.g.:
 
 ```ini
 Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin
 ```
 
-## Claude fragt nach Login / Authentifizierung
+## Claude asks for login / authentication
 
-Der Service läuft als `<user>` ohne interaktives Terminal. Login muss
-vorher einmalig interaktiv als `<user>` erfolgen (`claude login`), oder es
-wird ein `ANTHROPIC_API_KEY` über `/etc/claude-cli-controller.env`
-gesetzt (siehe `docs/SETUP.md`, Schritt 3) — **nicht** direkt als
-`Environment=`-Zeile in der Unit, das wäre per `systemctl show` für jeden
-lokalen User auf dem Host lesbar.
+The service runs as `<user>` without an interactive terminal. Log in once
+interactively as `<user>` beforehand (`claude login`), or provide an
+`ANTHROPIC_API_KEY` via `/etc/claude-cli-controller.env` (see
+`docs/SETUP.md`, step 3) — **not** directly as an `Environment=` line in the
+unit, which would be readable by every local user via `systemctl show`.
 
-## Session hängt am "Trust this folder?"-Dialog
+## Session hangs at the "Trust this folder?" dialog
 
-Betrifft nur Sessions, die nicht über `controller.sh new` angelegt wurden
-(z.B. manuell in `sessions.conf` eingetragen) — `new` markiert das
-Verzeichnis automatisch als vertrauenswürdig. Fix:
+Only affects sessions that were not created with `controller.sh new` (e.g.
+entered into `sessions.conf` by hand, or `new` with an already existing
+directory) — `new` marks directories it creates itself as trusted
+automatically. Fix:
 
 ```bash
-python3 - <<'PYEOF'
-import json, os
-path = os.path.expanduser("~/.claude.json")
-target = "/absoluter/pfad/zum/projekt"   # anpassen
-with open(path) as f:
-    data = json.load(f)
-entry = data.setdefault("projects", {}).setdefault(target, {})
-entry.setdefault("allowedTools", [])
-entry["hasTrustDialogAccepted"] = True
-tmp = path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(data, f, indent=2); f.write("\n")
-os.replace(tmp, path)
-PYEOF
-
+./controller.sh trust <nr|name>     # marks the session's workdir as trusted
 tmux -S ~/.local/state/claude-cli-controller/tmux.sock kill-session -t <name>
-./controller.sh start
+./controller.sh start               # (or wait for the supervisor's next tick)
 ```
 
-## Session hängt / reagiert nicht mehr
+Alternatively, confirm the dialog once via `./controller.sh attach <name>`.
+
+If the dialog still appears after `trust`: `~/.claude.json` is rewritten as a
+whole and running `claude` processes write to it as well, so a concurrent
+write can overwrite the change — run `trust` again. If the workdir is a
+symlink, `trust` stores the resolved path, which may differ from the path
+`claude` uses; confirm the dialog once via `attach` in that case.
+
+## Session hangs / does not respond
 
 ```bash
 ./controller.sh attach <name>
-# pruefen; ein einzelnes Ctrl-C beendet Claude Code NICHT (zeigt nur
-# "Press Ctrl-C again to exit" und braucht ein zweites Ctrl-C innerhalb
-# von ~1s, siehe docs/SESSIONS.md) - danach Ctrl-b d zum Loesen
+# take a look; a single Ctrl-C does NOT exit Claude Code (it only shows
+# "Press Ctrl-C again to exit" and needs a second Ctrl-C within ~1s, see
+# docs/SESSIONS.md) - afterwards Ctrl-b d detaches
 ```
 
-Wenn das nicht hilft:
+If that does not help:
 
 ```bash
 tmux -S ~/.local/state/claude-cli-controller/tmux.sock kill-session -t <name>
 ./controller.sh start
 ```
 
-## Log-Dateien wachsen unbegrenzt
+## A session keeps failing (`[failed: N Versuche, ...]` in `status`/`list`)
 
-Fertige `logrotate`-Config liegt unter `logrotate/claude-cli-controller.conf`
-bei (Installation: siehe `docs/SETUP.md`, Schritt 4b). `copytruncate` ist
-darin notwendig, da tmux `pipe-pane` die Datei offen hält — ein normales
-rename+neu-anlegen würde die laufende `pipe-pane`-Instanz nicht mitbekommen.
+The session could not be started N times in a row and is now retried only
+every few minutes (backoff, up to 15min). Look at the transcript and the
+snapshot under `~/.local/state/claude-cli-controller/logs/<name>.log` and
+`<name>.snapshot.txt`. Typical causes: `resume` is `last` but the workdir has
+no conversation yet (`No conversation found to continue`), the workdir is
+missing, or `claude` is not logged in. After fixing the cause, the next
+successful start resets the counter.
 
-Die `.snapshot.txt`-Dateien (periodischer Klartext-Schnappschuss, siehe
-`docs/SESSIONS.md`) brauchen keine Rotation, da sie bei jedem
-Supervisor-Tick überschrieben statt angehängt werden.
+## Log files grow without bound
 
-## Nach Neustart verbindet sich die Desktop App zu einer neuen, leeren Session
+A ready-made `logrotate` config is included at
+`logrotate/claude-cli-controller.conf` (installation: see `docs/SETUP.md`,
+step 5). `copytruncate` is required there because tmux `pipe-pane` keeps the
+file open — a normal rename+recreate would not be noticed by the running
+`pipe-pane` instance.
 
-Remote Control war aktiv, aber die Desktop App zeigt keine bisherige
-Konversation, sondern startet leer. Ursache: `resume` ist in
-`sessions.conf` leer, daher startet `claude` bei jedem `start`/`supervise`
-(also auch nach Container-/Host-Neustart) eine **neue** Konversation —
-`--remote-control` aktiviert dann nur Remote Control für diese neue,
-leere Session. Die alte Konversation bleibt zwar erhalten, ist aber nicht
-mehr die, mit der sich Remote Control verbindet.
+The `.snapshot.txt` files (periodic plain-text snapshot, see
+`docs/SESSIONS.md`) need no rotation since they are overwritten, not
+appended to, on every supervisor tick.
 
-Fix: `resume` auf `last` setzen, damit `build_cmd` stattdessen
-`claude --continue --remote-control <name>` baut (siehe
-`docs/SESSIONS.md`):
+## After a restart the desktop app connects to a new, empty session
+
+Remote Control was active, but the desktop app shows no previous
+conversation and starts empty. Cause: `resume` is empty in `sessions.conf`,
+so `claude` starts a **new** conversation on every `start`/`supervise` (also
+after a container/host restart) — `--remote-control` then only enables Remote
+Control for that new, empty session. The old conversation is preserved but is
+no longer the one Remote Control connects to.
+
+Fix: set `resume` to `last`, so `build_cmd` builds `claude --continue
+--remote-control <name>` instead (see `docs/SESSIONS.md`):
+
+```bash
+./controller.sh edit <nr|name> --resume last
+```
+
+or in `sessions.conf`:
 
 ```
 main;/home/<user>/projects/project-a;last;;active
 ```
 
-Wirkt erst beim nächsten Neustart der jeweiligen Session — laufende
-Sessions werden von `start_one` übersprungen (`session_exists`), daher
-ggf. einmalig `./controller.sh restart` bzw. die betroffene Session neu
-starten, um die geänderte Config zu übernehmen.
+This only takes effect the next time the session starts — running sessions
+are skipped by `start_one` (`session_exists`), so restart the affected
+session once (`./controller.sh restart` restarts all).
 
-## Container-Neustart bringt Sessions nicht wieder hoch
+## Container restart does not bring the sessions back
 
-- Prüfen, ob der Service aktiviert ist: `systemctl is-enabled claude-cli-controller.service`
-- Prüfen, ob der LXC-Container selbst `onboot: 1` hat (Host-seitig,
-  außerhalb dieses Projekts).
+- Check whether the service is enabled: `systemctl is-enabled claude-cli-controller.service`
+- Check whether the LXC container itself has `onboot: 1` (host side,
+  outside this project).
