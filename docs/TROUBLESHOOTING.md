@@ -40,27 +40,14 @@ unit, which would be readable by every local user via `systemctl show`.
 ## Session hangs at the "Trust this folder?" dialog
 
 Only affects sessions that were not created with `controller.sh new` (e.g.
-entered into `sessions.conf` by hand) — `new` marks the directory as trusted
+entered into `sessions.conf` by hand, or `new` with an already existing
+directory) — `new` marks directories it creates itself as trusted
 automatically. Fix:
 
 ```bash
-python3 - <<'PYEOF'
-import json, os
-path = os.path.expanduser("~/.claude.json")
-target = "/absolute/path/to/project"   # adjust
-with open(path) as f:
-    data = json.load(f)
-entry = data.setdefault("projects", {}).setdefault(target, {})
-entry.setdefault("allowedTools", [])
-entry["hasTrustDialogAccepted"] = True
-tmp = path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(data, f, indent=2); f.write("\n")
-os.replace(tmp, path)
-PYEOF
-
+./controller.sh trust <nr|name>     # marks the session's workdir as trusted
 tmux -S ~/.local/state/claude-cli-controller/tmux.sock kill-session -t <name>
-./controller.sh start
+./controller.sh start               # (or wait for the supervisor's next tick)
 ```
 
 Alternatively, confirm the dialog once via `./controller.sh attach <name>`.

@@ -39,6 +39,7 @@ them alive afterwards.
 | `controller.sh unarchive <nr\|name>` | Re-activate an archived session (start it separately) |
 | `controller.sh rename <nr\|name> <new-name>` | Rename a session (config, running tmux session, log files) |
 | `controller.sh edit <nr\|name> [--workdir ...] [--resume ...] [--extra-args ...]` | Change config fields (effective at the next start of that session) |
+| `controller.sh trust <nr\|name>` | Mark the session's workdir as trusted in `~/.claude.json` (for existing directories) |
 | `controller.sh delete <nr\|name> [--purge-workdir [--force]]` | Remove a session, optionally including its directory |
 | `controller.sh start` | Start all active sessions (idempotent, skips archived ones) |
 | `controller.sh stop` | Stop all sessions |

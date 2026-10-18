@@ -42,7 +42,10 @@ normally.
 interactive trust prompt in the unattended tmux session, since nobody is
 there to confirm it. This only applies to directories that `controller.sh`
 creates itself — for an already existing directory the dialog is not
-bypassed and must be confirmed once via `controller.sh attach`. Disable
+bypassed automatically; either confirm it once via `controller.sh attach`
+or run `./controller.sh trust <nr|name>` (explicit, works regardless of
+`CLAUDE_CTRL_AUTO_TRUST`; takes effect on the next start of a session that
+is already running). Disable
 auto-trust entirely with `CLAUDE_CTRL_AUTO_TRUST=0`.
 
 `workdir`, `resume` and `extra_args` must not contain a semicolon or a line
@@ -78,7 +81,7 @@ Nr  Status    Läuft    Name                 Workdir
 
 The number refers to the order in `sessions.conf` (comments do not count)
 and can be used wherever a name is expected: `attach`, `archive`,
-`unarchive`, `rename`, `edit`, `delete`.
+`unarchive`, `rename`, `edit`, `trust`, `delete`.
 
 ## Archiving a session
 

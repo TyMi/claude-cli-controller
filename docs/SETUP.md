@@ -122,7 +122,7 @@ echo 'source /home/<user>/claude-cli-controller/completions/claude-cli-controlle
 ```
 
 Completes subcommands and (by number from `list`) the session reference for
-`attach`/`archive`/`unarchive`/`rename`/`edit`/`delete`.
+`attach`/`archive`/`unarchive`/`rename`/`edit`/`trust`/`delete`.
 
 ## 7. After config changes
 
