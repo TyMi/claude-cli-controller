@@ -1,0 +1,8 @@
+# Keeps the GitHub Actions used in .github/workflows/ up to date.
+# Free for public repositories; opens a pull request when an action has a new release.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
