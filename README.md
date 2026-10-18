@@ -86,6 +86,7 @@ accidentally committed secrets.
 - [Setup](docs/SETUP.md) — LXC container + systemd, step by step
 - [Sessions](docs/SESSIONS.md) — config format, resume behavior, logs, backoff
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — known problems and fixes
+- [Security policy](SECURITY.md) — how to report a vulnerability privately
 
 ## License
 
