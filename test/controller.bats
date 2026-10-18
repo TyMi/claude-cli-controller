@@ -293,6 +293,72 @@ EOF
     [ "$status" -ne 0 ]
 }
 
+# --- C1: Semikolon/Zeilenumbruch in Config-Feldern ---
+
+@test "new rejects a semicolon in extra_args and writes nothing" {
+    run "$CTL" new semi "" "" "--foo;bar"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Semikolon"* ]]
+    ! grep -q "^semi;" "$CLAUDE_CTRL_CONFIG"
+}
+
+@test "new rejects a semicolon in workdir" {
+    run "$CTL" new semi "$TESTDIR/a;b"
+    [ "$status" -ne 0 ]
+    [ ! -e "$TESTDIR/a;b" ]
+}
+
+@test "edit rejects a semicolon and leaves the config unchanged" {
+    mkdir -p "$TESTDIR/projects/demo"
+    echo "demo;$TESTDIR/projects/demo;last;;active" > "$CLAUDE_CTRL_CONFIG"
+    run "$CTL" edit 1 --extra-args "--x;--y"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Semikolon"* ]]
+    run cat "$CLAUDE_CTRL_CONFIG"
+    [ "$output" = "demo;$TESTDIR/projects/demo;last;;active" ]
+}
+
+# --- C2: delete-Argumente ---
+
+@test "delete --force without --purge-workdir is refused, entry kept" {
+    run "$CTL" new proja
+    run "$CTL" delete 1 --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--purge-workdir"* ]]
+    grep -q "^proja;" "$CLAUDE_CTRL_CONFIG"
+}
+
+@test "delete rejects unknown options, entry kept" {
+    run "$CTL" new proja
+    run "$CTL" delete 1 --bogus
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unbekannte Option"* ]]
+    grep -q "^proja;" "$CLAUDE_CTRL_CONFIG"
+}
+
+@test "delete accepts --force before --purge-workdir" {
+    mkdir -p "$TESTDIR/outside"
+    run "$CTL" new proja "$TESTDIR/outside"
+    run "$CTL" delete 1 --force --purge-workdir
+    [ "$status" -eq 0 ]
+    [ ! -d "$TESTDIR/outside" ]
+}
+
+# --- C6: config_rewrite erhaelt Kommentare ---
+
+@test "rename and archive keep comments and other entries intact" {
+    mkdir -p "$TESTDIR/projects/a" "$TESTDIR/projects/b"
+    printf '# Kommentar\na;%s;;;active\n\nb;%s;last;;active\n' "$TESTDIR/projects/a" "$TESTDIR/projects/b" > "$CLAUDE_CTRL_CONFIG"
+    run "$CTL" rename 1 aa
+    [ "$status" -eq 0 ]
+    run "$CTL" archive 2
+    [ "$status" -eq 0 ]
+    run cat "$CLAUDE_CTRL_CONFIG"
+    # Leerzeilen werden von "run" nicht zuverlaessig als eigene Eintraege
+    # in $lines abgebildet - daher ueber die Datei direkt vergleichen.
+    [ "$(cat "$CLAUDE_CTRL_CONFIG")" = "$(printf '# Kommentar\naa;%s;;;active\n\nb;%s;last;;archived' "$TESTDIR/projects/a" "$TESTDIR/projects/b")" ]
+}
+
 # --- F9: backup/restore ---
 
 # HOME wird hier bewusst auf ein Fake-Verzeichnis isoliert - sonst wuerde

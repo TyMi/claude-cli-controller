@@ -70,6 +70,17 @@ valid_name() {
     [[ "$n" =~ [[:alpha:]] ]]
 }
 
+# Config-Felder sind Semikolon-getrennt und zeilenbasiert: ein ";" oder
+# Zeilenumbruch im Wert wuerde die Zeile in sessions.conf stillschweigend
+# verschieben bzw. aufspalten. Fuer workdir/resume/extra_args beim Schreiben
+# ueber "new"/"edit" pruefen.
+valid_field() {
+    [[ "$2" != *[';'$'\n'$'\r']* ]] || {
+        log ERROR "Ungültiger Wert für $1: Semikolon und Zeilenumbruch sind in sessions.conf-Feldern nicht erlaubt"
+        return 1
+    }
+}
+
 # Backoff-Zustand pro Session: "$BACKOFF_DIR/<name>" enthaelt
 # "fail_count;last_attempt_epoch". Verhindert, dass eine dauerhaft
 # fehlschlagende Session (z.B. "--continue" ohne vorhandene Konversation,
@@ -212,37 +223,6 @@ resolve_target() {
     fi
 }
 
-# Schreibt für die Session $1 den Status-Wert $2 in die Config zurück,
-# alle anderen Zeilen bleiben unverändert erhalten.
-config_set_status() {
-    local target="$1" newstatus="$2"
-    require_config
-    local tmpfile
-    tmpfile="$(mktemp "${CONFIG_FILE}.XXXXXX")"
-    local line name workdir resume extra status found=0
-    while IFS='' read -r line || [[ -n "$line" ]]; do
-        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-            printf '%s\n' "$line" >> "$tmpfile"
-            continue
-        fi
-        IFS=';' read -r name workdir resume extra status <<< "$line"
-        if [[ "$(trim "$name")" == "$target" ]]; then
-            printf '%s;%s;%s;%s;%s\n' \
-                "$(trim "$name")" "$(trim "${workdir:-}")" "$(trim "${resume:-}")" "$(trim "${extra:-}")" "$newstatus" >> "$tmpfile"
-            found=1
-        else
-            printf '%s\n' "$line" >> "$tmpfile"
-        fi
-    done < "$CONFIG_FILE"
-    if [[ "$found" -eq 0 ]]; then
-        rm -f "$tmpfile"
-        log ERROR "[$target] nicht in $CONFIG_FILE gefunden"
-        exit 1
-    fi
-    mv "$tmpfile" "$CONFIG_FILE"
-    SESSIONS_LOADED=0
-}
-
 # Gibt das Workdir-Feld der Session $1 aus sessions.conf zurück (leer,
 # falls nicht gefunden).
 config_get_workdir() {
@@ -253,39 +233,18 @@ config_get_workdir() {
     done
 }
 
-# Entfernt die Zeile der Session $1 komplett aus sessions.conf (Gegenstück
-# zu config_set_status, das die Zeile nur mit neuem Status umschreibt).
-config_remove_entry() {
-    local target="$1"
-    require_config
-    local tmpfile
-    tmpfile="$(mktemp "${CONFIG_FILE}.XXXXXX")"
-    local line name found=0
-    while IFS='' read -r line || [[ -n "$line" ]]; do
-        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-            printf '%s\n' "$line" >> "$tmpfile"
-            continue
-        fi
-        IFS=';' read -r name _ <<< "$line"
-        if [[ "$(trim "$name")" == "$target" ]]; then
-            found=1
-            continue
-        fi
-        printf '%s\n' "$line" >> "$tmpfile"
-    done < "$CONFIG_FILE"
-    if [[ "$found" -eq 0 ]]; then
-        rm -f "$tmpfile"
-        log ERROR "[$target] nicht in $CONFIG_FILE gefunden"
-        exit 1
-    fi
-    mv "$tmpfile" "$CONFIG_FILE"
-    SESSIONS_LOADED=0
-}
-
-# Benennt die Session $1 zu $2 um (Gegenstück zu config_set_status, aendert
-# aber das Name-Feld statt Status). Fuer "rename" (F8).
-config_rename_entry() {
-    local target="$1" newname="$2"
+# Gemeinsamer Kern aller Schreibzugriffe auf sessions.conf: schreibt die
+# Datei zeilenweise neu (Kommentare/Leerzeilen/Formatierung bleiben exakt
+# erhalten) und aendert nur die Zeile der Session $1. $2 = Operation:
+#   status <neu>                          Status-Feld setzen
+#   remove                                Zeile entfernen
+#   rename <neu>                          Name-Feld setzen
+#   edit <set_w> <w> <set_r> <r> <set_e> <e>
+#                                         workdir/resume/extra_args setzen
+#                                         (set_*: 0/1 = Feld ueberschreiben)
+config_rewrite() {
+    local target="$1" op="$2"
+    shift 2
     require_config
     local tmpfile
     tmpfile="$(mktemp "${CONFIG_FILE}.XXXXXX")"
@@ -296,13 +255,24 @@ config_rename_entry() {
             continue
         fi
         IFS=';' read -r name workdir resume extra status <<< "$line"
-        if [[ "$(trim "$name")" == "$target" ]]; then
-            printf '%s;%s;%s;%s;%s\n' \
-                "$newname" "$(trim "${workdir:-}")" "$(trim "${resume:-}")" "$(trim "${extra:-}")" "$(trim "${status:-}")" >> "$tmpfile"
-            found=1
-        else
+        if [[ "$(trim "$name")" != "$target" ]]; then
             printf '%s\n' "$line" >> "$tmpfile"
+            continue
         fi
+        found=1
+        name="$(trim "$name")"; workdir="$(trim "${workdir:-}")"
+        resume="$(trim "${resume:-}")"; extra="$(trim "${extra:-}")"; status="$(trim "${status:-}")"
+        case "$op" in
+            remove) continue ;;
+            status) status="$1" ;;
+            rename) name="$1" ;;
+            edit)
+                (( $1 )) && workdir="$2"
+                (( $3 )) && resume="$4"
+                (( $5 )) && extra="$6"
+                ;;
+        esac
+        printf '%s;%s;%s;%s;%s\n' "$name" "$workdir" "$resume" "$extra" "$status" >> "$tmpfile"
     done < "$CONFIG_FILE"
     if [[ "$found" -eq 0 ]]; then
         rm -f "$tmpfile"
@@ -312,40 +282,19 @@ config_rename_entry() {
     mv "$tmpfile" "$CONFIG_FILE"
     SESSIONS_LOADED=0
 }
+
+# Schreibt für die Session $1 den Status-Wert $2 in die Config zurück.
+config_set_status() { config_rewrite "$1" status "$2"; }
+
+# Entfernt die Zeile der Session $1 komplett (Gegenstück zu config_set_status).
+config_remove_entry() { config_rewrite "$1" remove; }
+
+# Benennt die Session $1 zu $2 um. Für "rename" (F8).
+config_rename_entry() { config_rewrite "$1" rename "$2"; }
 
 # Aendert gezielt workdir/resume/extra_args der Session $1, je nachdem
-# welches der set_*-Flags (0/1) gesetzt ist. Fuer "edit" (F8).
-config_edit_entry() {
-    local target="$1" set_workdir="$2" new_workdir="$3" set_resume="$4" new_resume="$5" set_extra="$6" new_extra="$7"
-    require_config
-    local tmpfile
-    tmpfile="$(mktemp "${CONFIG_FILE}.XXXXXX")"
-    local line name workdir resume extra status found=0
-    while IFS='' read -r line || [[ -n "$line" ]]; do
-        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-            printf '%s\n' "$line" >> "$tmpfile"
-            continue
-        fi
-        IFS=';' read -r name workdir resume extra status <<< "$line"
-        if [[ "$(trim "$name")" == "$target" ]]; then
-            workdir="$(trim "${workdir:-}")"; resume="$(trim "${resume:-}")"; extra="$(trim "${extra:-}")"
-            (( set_workdir )) && workdir="$new_workdir"
-            (( set_resume )) && resume="$new_resume"
-            (( set_extra )) && extra="$new_extra"
-            printf '%s;%s;%s;%s;%s\n' "$(trim "$name")" "$workdir" "$resume" "$extra" "$(trim "${status:-}")" >> "$tmpfile"
-            found=1
-        else
-            printf '%s\n' "$line" >> "$tmpfile"
-        fi
-    done < "$CONFIG_FILE"
-    if [[ "$found" -eq 0 ]]; then
-        rm -f "$tmpfile"
-        log ERROR "[$target] nicht in $CONFIG_FILE gefunden"
-        exit 1
-    fi
-    mv "$tmpfile" "$CONFIG_FILE"
-    SESSIONS_LOADED=0
-}
+# welches der set_*-Flags (0/1) gesetzt ist. Für "edit" (F8).
+config_edit_entry() { config_rewrite "$1" edit "$2" "$3" "$4" "$5" "$6" "$7"; }
 
 # Markiert $1 in ~/.claude.json als vertrauenswürdig (hasTrustDialogAccepted),
 # damit "claude" beim ersten Start in einer unbeaufsichtigten tmux-Session
@@ -645,6 +594,7 @@ cmd_new() {
         log ERROR "[$name] ungueltiger Session-Name (nur Buchstaben/Ziffern/Leerzeichen/-/_ erlaubt, max. 64 Zeichen)"
         exit 1
     fi
+    valid_field workdir "$workdir" && valid_field resume "$resume" && valid_field extra_args "$extra" || exit 1
     if session_defined "$name"; then
         log ERROR "[$name] existiert bereits in $CONFIG_FILE"
         exit 1
@@ -701,9 +651,22 @@ cmd_unarchive() {
 # erhalten (nur der Controller-Eintrag verschwindet) - erst mit
 # --purge-workdir wird es zusätzlich unwiderruflich gelöscht.
 cmd_delete() {
-    local target="${1:?Usage: controller.sh delete <nummer|name> [--purge-workdir [--force]]}"
-    local purge="${2:-}"
-    local force="${3:-}"
+    local usage="Usage: controller.sh delete <nummer|name> [--purge-workdir [--force]]"
+    local target="${1:?$usage}"
+    shift
+    local purge="" force=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --purge-workdir) purge="--purge-workdir" ;;
+            --force)         force="--force" ;;
+            *) log ERROR "Unbekannte Option: $1 ($usage)"; exit 1 ;;
+        esac
+        shift
+    done
+    if [[ -n "$force" && -z "$purge" ]]; then
+        log ERROR "--force ist nur zusammen mit --purge-workdir sinnvoll ($usage)"
+        exit 1
+    fi
     local name; name="$(resolve_target "$target")"
     session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
 
@@ -802,6 +765,7 @@ cmd_edit() {
         log ERROR "Nichts zu aendern angegeben (siehe: controller.sh edit <nr|name> --workdir/--resume/--extra-args <wert>)"
         exit 1
     fi
+    valid_field workdir "$new_workdir" && valid_field resume "$new_resume" && valid_field extra_args "$new_extra" || exit 1
     config_edit_entry "$name" "$set_workdir" "$new_workdir" "$set_resume" "$new_resume" "$set_extra" "$new_extra"
     log INFO "[$name] Config aktualisiert (wirkt erst beim naechsten Start dieser Session)"
 }
@@ -815,8 +779,10 @@ cmd_attach() {
 
 cmd_supervise() {
     log INFO "Supervisor gestartet (Intervall: ${SUPERVISE_INTERVAL}s)"
-    cmd_start_all
+    # Trap VOR dem ersten Start setzen, damit auch ein TERM/INT waehrend
+    # des (bei vielen Sessions laenger dauernden) Starts sauber stoppt.
     trap 'log INFO "Supervisor beendet, stoppe Sessions"; cmd_stop_all; exit 0' TERM INT
+    cmd_start_all
     while true; do
         # "sleep X" allein blockiert die Trap-Verarbeitung in Bash bis zu X
         # Sekunden (Signal wird erst NACH dem Ende des Foreground-Kommandos
@@ -935,7 +901,7 @@ main() {
         unarchive)  cmd_unarchive "${1:-}" ;;
         rename)     cmd_rename "${1:-}" "${2:-}" ;;
         edit)       cmd_edit "$@" ;;
-        delete)     cmd_delete "${1:-}" "${2:-}" "${3:-}" ;;
+        delete)     cmd_delete "$@" ;;
         backup)     cmd_backup "${1:-}" ;;
         restore)    cmd_restore "${1:-}" "${2:-}" ;;
         *)          usage; exit 1 ;;
