@@ -16,7 +16,7 @@ _claude_cli_controller() {
     local commands="start stop restart status list attach supervise new archive unarchive rename edit trust delete backup restore"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+        mapfile -t COMPREPLY < <(compgen -W "$commands" -- "$cur")
         return 0
     fi
 
@@ -26,7 +26,7 @@ _claude_cli_controller() {
             if [[ $COMP_CWORD -eq 2 ]]; then
                 local ctl="${COMP_WORDS[0]}" count
                 count="$("$ctl" list 2>/dev/null | tail -n +2 | wc -l)"
-                [[ "$count" -gt 0 ]] && COMPREPLY=( $(compgen -W "$(seq 1 "$count")" -- "$cur") )
+                [[ "$count" -gt 0 ]] && mapfile -t COMPREPLY < <(compgen -W "$(seq 1 "$count")" -- "$cur")
             fi
             ;;
         delete)
@@ -34,17 +34,17 @@ _claude_cli_controller() {
                 2)
                     local ctl="${COMP_WORDS[0]}" count
                     count="$("$ctl" list 2>/dev/null | tail -n +2 | wc -l)"
-                    [[ "$count" -gt 0 ]] && COMPREPLY=( $(compgen -W "$(seq 1 "$count")" -- "$cur") )
+                    [[ "$count" -gt 0 ]] && mapfile -t COMPREPLY < <(compgen -W "$(seq 1 "$count")" -- "$cur")
                     ;;
-                3) COMPREPLY=( $(compgen -W "--purge-workdir" -- "$cur") ) ;;
-                4) COMPREPLY=( $(compgen -W "--force" -- "$cur") ) ;;
+                3) mapfile -t COMPREPLY < <(compgen -W "--purge-workdir" -- "$cur") ;;
+                4) mapfile -t COMPREPLY < <(compgen -W "--force" -- "$cur") ;;
             esac
             ;;
         status)
-            [[ $COMP_CWORD -eq 2 ]] && COMPREPLY=( $(compgen -W "--json" -- "$cur") )
+            [[ $COMP_CWORD -eq 2 ]] && mapfile -t COMPREPLY < <(compgen -W "--json" -- "$cur")
             ;;
         restore)
-            [[ $COMP_CWORD -eq 3 ]] && COMPREPLY=( $(compgen -W "--force" -- "$cur") )
+            [[ $COMP_CWORD -eq 3 ]] && mapfile -t COMPREPLY < <(compgen -W "--force" -- "$cur")
             ;;
     esac
 }
