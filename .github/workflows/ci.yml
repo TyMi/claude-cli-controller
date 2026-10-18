@@ -47,7 +47,7 @@ jobs:
       - name: shellcheck
         run: |
           command -v shellcheck || { sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y shellcheck; }
-          shellcheck controller.sh
+          shellcheck controller.sh completions/claude-cli-controller.bash
 
   bats:
     if: github.event.repository.private == false
@@ -83,3 +83,20 @@ jobs:
           echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
           tar xzf gitleaks.tgz gitleaks
           ./gitleaks detect --source . --redact --no-banner --exit-code 1
+
+  # Sammel-Job für den Branch-Schutz: nur dieser eine Check muss als Pflicht
+  # eingetragen werden und ist nur grün, wenn alle Jobs erfolgreich waren
+  # (ein übersprungener Job gilt hier als Fehler, z.B. bei privatem Repo).
+  ci:
+    if: always()
+    needs: [actionlint, shellcheck, bats, gitleaks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ergebnis aller Jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "Job-Ergebnis: $r"; exit 1; }
+          done
