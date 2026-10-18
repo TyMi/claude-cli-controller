@@ -1,14 +1,14 @@
-# Bash-Completion fuer controller.sh.
+# Bash-Completion für controller.sh.
 #
 # Einbinden, z.B. in ~/.bashrc:
 #   source /pfad/zu/claude-cli-controller/completions/claude-cli-controller.bash
 #
-# Vervollstaendigt nur den Subcommand und - fuer Kommandos, die eine
+# Vervollständigt nur den Subcommand und - für Kommandos, die eine
 # Session referenzieren - die Nummer aus "list" (1..N), keine Namen: viele
 # reale Session-Namen enthalten Leerzeichen (siehe docs/SESSIONS.md), und
-# Bash-Completion mit space-haltigen compgen-Woertern ist ohne deutlich
-# mehr Aufwand (IFS-Handling, Quoting der COMPREPLY-Eintraege) fragil -
-# die ohnehin ueberall unterstuetzten Nummern sind hier der robustere Weg.
+# Bash-Completion mit space-haltigen compgen-Wörtern ist ohne deutlich
+# mehr Aufwand (IFS-Handling, Quoting der COMPREPLY-Einträge) fragil -
+# die ohnehin überall unterstützten Nummern sind hier der robustere Weg.
 
 _claude_cli_controller() {
     local cur cmd

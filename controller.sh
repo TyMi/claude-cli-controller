@@ -26,20 +26,20 @@ FAILED_THRESHOLD=5
 mkdir -p "$STATE_DIR" "$LOG_DIR" "$BACKOFF_DIR"
 # Logs enthalten die komplette Terminal-Ausgabe jeder Session (potenziell
 # Secrets). "chmod" statt nur "mkdir -m", damit auch bereits vorhandene
-# Verzeichnisse aus aelteren Versionen nachtraeglich abgesichert werden -
+# Verzeichnisse aus älteren Versionen nachträglich abgesichert werden -
 # ein Verzeichnis-Recht von 700 reicht aus, um andere lokale User vom
-# Zugriff auf die Dateien darin auszuschliessen, unabhaengig von deren
-# eigenem Modus. Robustheits-Review 2026-09-24, S6.
+# Zugriff auf die Dateien darin auszuschliessen, unabhängig von deren
+# eigenem Modus.
 chmod 700 "$STATE_DIR" "$LOG_DIR" "$BACKOFF_DIR" 2>/dev/null || true
 
 tmux_() { tmux -S "$TMUX_SOCK" "$@"; }
 
 # Nach stderr statt stdout: mehrere Funktionen (build_cmd, resolve_target,
 # config_get_workdir) werden per "$(...)" aufgerufen, deren stdout also als
-# Rueckgabewert interpretiert wird - eine log-Zeile auf stdout wuerde dort
-# den eigentlichen Rueckgabewert verunreinigen. journalctl/systemctl
+# Rückgabewert interpretiert wird - eine log-Zeile auf stdout würde dort
+# den eigentlichen Rückgabewert verunreinigen. journalctl/systemctl
 # erfassen stderr genauso wie stdout, im Terminal ist ebenfalls kein
-# Unterschied sichtbar. Robustheits-Review 2026-09-25, im Zuge von S4.
+# Unterschied sichtbar.
 log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2" >&2; }
 
 # Reines Bash-Trimming (kein "echo | xargs"): xargs interpretiert
@@ -56,14 +56,13 @@ trim() {
 # [:alpha:]/UTF-8-Locale, Ziffern, Leerzeichen, Bindestrich, Unterstrich).
 # Blockiert insbesondere Anführungszeichen, Semikolon, $, Backtick,
 # Backslash, /, |, &, <, >, (, ), {, }, # und ".". $name landet sonst
-# ungefiltert in tmux-Kommandos (pipe-pane laeuft ueber eine Shell) und im
-# Default-Pfad $PROJECTS_BASE_DIR/$name — siehe Security-Review 2026-09-24
-# (S1: Shell-Injection, per PoC bestaetigt; zuendet verzoegert, sobald die
-# betroffene Session/Pane endet).
-# Zusaetzlich mindestens ein Buchstabe Pflicht: verhindert rein numerische
+# ungefiltert in tmux-Kommandos (pipe-pane läuft über eine Shell) und im
+# Default-Pfad $PROJECTS_BASE_DIR/$name — Shell-Injection
+# (per PoC bestätigt; zündet verzögert, sobald die betroffene Session/Pane
+# endet).
+# Zusätzlich mindestens ein Buchstabe Pflicht: verhindert rein numerische
 # Namen wie "2024", die "resolve_target" sonst immer als Listenindex statt
-# als Namen interpretiert und dadurch nie per Namen ansprechbar waeren
-# (Robustheits-Review 2026-09-24, B6).
+# als Namen interpretiert und dadurch nie per Namen ansprechbar wären.
 valid_name() {
     local n="$1"
     [[ "$n" =~ ^[[:alpha:][:digit:]_-][[:alpha:][:digit:]\ _-]{0,63}$ ]] || return 1
@@ -71,9 +70,9 @@ valid_name() {
 }
 
 # Config-Felder sind Semikolon-getrennt und zeilenbasiert: ein ";" oder
-# Zeilenumbruch im Wert wuerde die Zeile in sessions.conf stillschweigend
-# verschieben bzw. aufspalten. Fuer workdir/resume/extra_args beim Schreiben
-# ueber "new"/"edit" pruefen.
+# Zeilenumbruch im Wert würde die Zeile in sessions.conf stillschweigend
+# verschieben bzw. aufspalten. Für workdir/resume/extra_args beim Schreiben
+# über "new"/"edit" prüfen.
 valid_field() {
     [[ "$2" != *[';'$'\n'$'\r']* ]] || {
         log ERROR "Ungültiger Wert für $1: Semikolon und Zeilenumbruch sind in sessions.conf-Feldern nicht erlaubt"
@@ -81,12 +80,11 @@ valid_field() {
     }
 }
 
-# Backoff-Zustand pro Session: "$BACKOFF_DIR/<name>" enthaelt
+# Backoff-Zustand pro Session: "$BACKOFF_DIR/<name>" enthält
 # "fail_count;last_attempt_epoch". Verhindert, dass eine dauerhaft
 # fehlschlagende Session (z.B. "--continue" ohne vorhandene Konversation,
 # siehe docs/SESSIONS.md) den Supervisor in eine ungebremste
-# Neustart-Schleife alle $SUPERVISE_INTERVAL Sekunden zwingt (Robustheits-
-# Review 2026-09-24, B1).
+# Neustart-Schleife alle $SUPERVISE_INTERVAL Sekunden zwingt.
 backoff_file() { printf '%s/%s' "$BACKOFF_DIR" "$(printf '%s' "$1" | tr '/ ' '__')"; }
 backoff_read() { local f; f="$(backoff_file "$1")"; [[ -f "$f" ]] && cat "$f" || echo "0;0"; }
 backoff_write() { printf '%s;%s\n' "$2" "$3" > "$(backoff_file "$1")"; }
@@ -104,12 +102,22 @@ ensure_config() {
         cat > "$CONFIG_FILE" <<'HEADER'
 # claude-cli-controller: Session-Definitionen
 #
-# Format: name;workdir;resume;extra_args;status
-#   name        eindeutiger tmux-Session-Name
-#   workdir     Arbeitsverzeichnis für "claude"
-#   resume      leer=neu, "last"/"continue"=--continue, sonst=--resume <id>
-#   extra_args  zusätzliche CLI-Flags
-#   status      "active" (Standard) oder "archived" (wird bei start/supervise übersprungen)
+# Format (Semikolon-getrennt, kein Semikolon in den Feldern selbst):
+#   name;workdir;resume;extra_args;status
+#
+#   name        eindeutiger tmux-Session-Name: Buchstaben (inkl. Umlaute),
+#               Ziffern, Leerzeichen, "-", "_", max. 64 Zeichen, mindestens
+#               ein Buchstabe
+#   workdir     Arbeitsverzeichnis für "claude" (leer = $HOME)
+#   resume      leer = neue Session; "last"/"continue" = --continue;
+#               <session-uuid> = --resume <session-uuid> (andere Werte
+#               werden verworfen, die Session startet dann ohne --resume)
+#   extra_args  zusätzliche CLI-Flags, z.B. --permission-mode acceptEdits
+#   status      "active" (Standard, leer = active) oder "archived"
+#               (wird bei start/supervise übersprungen)
+#
+# Normalerweise über ./controller.sh new/archive/unarchive/edit pflegen.
+# Zeilen mit "#" und leere Zeilen werden ignoriert.
 HEADER
         log INFO "Neue Config angelegt: $CONFIG_FILE"
     fi
@@ -120,27 +128,25 @@ require_config() {
 }
 
 # Liest CONFIG_FILE EINMAL pro Skriptaufruf in parallele Arrays ein, statt
-# dass jede der Lookup-Funktionen unten (frueher: each_session,
+# dass jede der Lookup-Funktionen unten (früher: each_session,
 # session_defined, resolve_target, config_get_workdir, cmd_list) die Datei
-# separat oeffnet und die Semikolon-Zeilen erneut parst. Ungueltige Namen
+# separat öffnet und die Semikolon-Zeilen erneut parst. Ungültige Namen
 # werden hier zentral einmal gefiltert+geloggt statt in jeder Funktion
-# einzeln. config_set_status/config_remove_entry/config_rename_entry/
-# config_edit_entry schreiben die Datei weiterhin zeilenbasiert (erhalten
-# Kommentare/Formatierung exakt) und setzen SESSIONS_LOADED=0, damit ein
-# nachfolgender Aufruf hier neu einliest. Robustheits-Review 2026-09-24,
-# O3 (zentrales Parsing) + O4 (Duplikat-Erkennung).
+# einzeln (zentrales Parsing, Duplikat-Erkennung). Schreibzugriffe laufen
+# über config_rewrite (zeilenbasiert, erhält Kommentare/Formatierung exakt)
+# und setzen SESSIONS_LOADED=0, damit ein nachfolgender Aufruf hier neu
+# einliest.
 SESSION_NAMES=(); SESSION_WORKDIRS=(); SESSION_RESUMES=(); SESSION_EXTRAS=(); SESSION_STATUSES=()
 SESSIONS_LOADED=0
 
 # sessions.conf ist effektiv Shell-Code (resume/extra_args landen
 # unquotiert im Kommandostring, siehe docs/SESSIONS.md) - warnen, falls
-# andere lokale User sie beschreiben koennen. Robustheits-Review
-# 2026-09-25, S4.
+# andere lokale User sie beschreiben können.
 check_config_perms() {
     local perms; perms="$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)" || return 0
     local group_digit="${perms: -2:1}" other_digit="${perms: -1}"
     if (( (10#$group_digit & 2) || (10#$other_digit & 2) )); then
-        log WARN "$CONFIG_FILE ist fuer andere lokale User beschreibbar (Rechte: $perms) - resume/extra_args werden als Shell-Code ausgefuehrt. Empfehlung: chmod 600 $CONFIG_FILE"
+        log WARN "$CONFIG_FILE ist für andere lokale User beschreibbar (Rechte: $perms) - resume/extra_args werden als Shell-Code ausgeführt. Empfehlung: chmod 600 $CONFIG_FILE"
     fi
 }
 
@@ -160,7 +166,7 @@ load_sessions() {
         status="$(trim "${status:-}")"
         [[ -z "$status" ]] && status="active"
         if ! valid_name "$name"; then
-            log ERROR "[$name] ungueltiger Session-Name in $CONFIG_FILE (nur Buchstaben/Ziffern/Leerzeichen/-/_, mind. 1 Buchstabe), Zeile wird uebersprungen"
+            log ERROR "[$name] ungültiger Session-Name in $CONFIG_FILE (nur Buchstaben/Ziffern/Leerzeichen/-/_, mind. 1 Buchstabe), Zeile wird übersprungen"
             continue
         fi
         for existing in "${SESSION_NAMES[@]}"; do
@@ -235,13 +241,13 @@ config_get_workdir() {
 
 # Gemeinsamer Kern aller Schreibzugriffe auf sessions.conf: schreibt die
 # Datei zeilenweise neu (Kommentare/Leerzeilen/Formatierung bleiben exakt
-# erhalten) und aendert nur die Zeile der Session $1. $2 = Operation:
+# erhalten) und ändert nur die Zeile der Session $1. $2 = Operation:
 #   status <neu>                          Status-Feld setzen
 #   remove                                Zeile entfernen
 #   rename <neu>                          Name-Feld setzen
 #   edit <set_w> <w> <set_r> <r> <set_e> <e>
 #                                         workdir/resume/extra_args setzen
-#                                         (set_*: 0/1 = Feld ueberschreiben)
+#                                         (set_*: 0/1 = Feld überschreiben)
 config_rewrite() {
     local target="$1" op="$2"
     shift 2
@@ -289,11 +295,11 @@ config_set_status() { config_rewrite "$1" status "$2"; }
 # Entfernt die Zeile der Session $1 komplett (Gegenstück zu config_set_status).
 config_remove_entry() { config_rewrite "$1" remove; }
 
-# Benennt die Session $1 zu $2 um. Für "rename" (F8).
+# Benennt die Session $1 zu $2 um. Für "rename".
 config_rename_entry() { config_rewrite "$1" rename "$2"; }
 
 # Aendert gezielt workdir/resume/extra_args der Session $1, je nachdem
-# welches der set_*-Flags (0/1) gesetzt ist. Für "edit" (F8).
+# welches der set_*-Flags (0/1) gesetzt ist. Für "edit".
 config_edit_entry() { config_rewrite "$1" edit "$2" "$3" "$4" "$5" "$6" "$7"; }
 
 # Markiert $1 in ~/.claude.json als vertrauenswürdig (hasTrustDialogAccepted),
@@ -343,14 +349,13 @@ build_cmd() {
         last|continue) cmd="$cmd --continue" ;;
         # Nur "last"/"continue" oder eine Session-UUID (Format wie von
         # "claude" selbst vergeben, z.B. 16999acc-1280-4d8f-b168-...)
-        # zulassen und sauber quoten - fuer diesen Wert ist nie Shell-
-        # Syntax noetig, ein unquotierter, unvalidierter Wert waere sonst
-        # ein weiterer Injection-Pfad neben dem in S1 gefixten $name.
-        # Robustheits-Review 2026-09-25, S4.
+        # zulassen und sauber quoten - für diesen Wert ist nie Shell-
+        # Syntax nötig, ein unquotierter, unvalidierter Wert wäre sonst
+        # ein weiterer Injection-Pfad neben dem bereits validierten $name.
         [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])
             cmd="$cmd --resume $(printf '%q' "$resume")" ;;
         *)
-            log ERROR "[$name] ungueltiger resume-Wert '$resume' in $CONFIG_FILE (erlaubt: leer, 'last', 'continue' oder eine Session-UUID) - Session startet ohne --resume"
+            log ERROR "[$name] ungültiger resume-Wert '$resume' in $CONFIG_FILE (erlaubt: leer, 'last', 'continue' oder eine Session-UUID) - Session startet ohne --resume"
             ;;
     esac
     [[ "$REMOTE_CONTROL" == "1" ]] && cmd="$cmd --remote-control $(printf '%q' "$name")"
@@ -363,17 +368,15 @@ start_one() {
     if [[ "$status" == "archived" ]]; then
         backoff_clear "$name"
         # Nur warnen, KEIN aktiver Stopp: eine Session, die z.B. durch
-        # manuelles Editieren von sessions.conf (statt ueber "archive",
+        # manuelles Editieren von sessions.conf (statt über "archive",
         # das explizit stoppt) als archived markiert wurde, aber noch
-        # laeuft, bleibt bewusst unangetastet - ein automatischer Zwangs-
-        # Stopp wuerde bei jedem Tick (SUPERVISE_INTERVAL) auch eine gerade
-        # aktiv genutzte Session treffen koennen, z.B. durch einen blossen
-        # Tippfehler beim Editieren. Passt zur Philosophie aus
-        # session-lifecycle.md: Sessions werden nur ueber explizite
-        # Aktionen gestoppt, nie automatisch im Hintergrund. Feature-
-        # Analyse 2026-09-24/25, O5.
+        # läuft, bleibt bewusst unangetastet - ein automatischer Zwangs-
+        # Stopp würde bei jedem Tick (SUPERVISE_INTERVAL) auch eine gerade
+        # aktiv genutzte Session treffen können, z.B. durch einen bloßen
+        # Tippfehler beim Editieren. Sessions werden nur über
+        # explizite Aktionen gestoppt, nie automatisch im Hintergrund.
         if session_exists "$name"; then
-            log WARN "[$name] ist als 'archived' markiert, laeuft aber noch - kein automatischer Stopp. Zum Stoppen: controller.sh archive $name"
+            log WARN "[$name] ist als 'archived' markiert, läuft aber noch - kein automatischer Stopp. Zum Stoppen: controller.sh archive $name"
         fi
         return 0
     fi
@@ -389,7 +392,7 @@ start_one() {
     if (( fail_count > 0 )); then
         local delay; delay="$(backoff_delay_for "$fail_count")"
         if (( now - last_attempt < delay )); then
-            # Noch in der Backoff-Pause: diesen Tick still uebergehen,
+            # Noch in der Backoff-Pause: diesen Tick still übergehen,
             # kein Log-Spam alle $SUPERVISE_INTERVAL Sekunden.
             return 0
         fi
@@ -410,16 +413,16 @@ start_one() {
     tmux_ new-session -d -s "$name" -c "${workdir:-$HOME}" "$cmd"
     # Kein "-t =$name" hier: tmux' exaktes Match bricht bei pipe-pane
     # (anders als bei has-session) mit "can't find pane", sobald $name ein
-    # Leerzeichen enthaelt (live getestet, tmux 3.4) — real vorkommende
-    # Namen wie "CamDisplay Schützen" wuerden sonst nie geloggt. Die
+    # Leerzeichen enthält (getestet mit tmux 3.4) — real vorkommende
+    # Namen wie "CamDisplay Schützen" würden sonst nie geloggt. Die
     # eigentliche Injection wird bereits durch valid_name() verhindert;
-    # printf %q auf den Logpfad bleibt als zusaetzliche Absicherung.
-    # "|| true": faengt eine bereits beendete Pane ab (z.B. ein extrem
+    # printf %q auf den Logpfad bleibt als zusätzliche Absicherung.
+    # "|| true": fängt eine bereits beendete Pane ab (z.B. ein extrem
     # schnell fehlschlagendes "claude --continue", oder in Tests ein
-    # Dummy-Binary wie /bin/true) - ohne diesen Guard wuerde ein
+    # Dummy-Binary wie /bin/true) - ohne diesen Guard würde ein
     # fehlschlagendes Log-Setup den gesamten "new"/"start"-Aufruf per
     # set -e abbrechen, obwohl die Session selbst erfolgreich erstellt
-    # wurde. Gefunden beim Schreiben der bats-Tests, 2026-09-25.
+    # wurde. Aufgefallen beim Schreiben der bats-Tests.
     tmux_ pipe-pane -t "$name" -o "cat >> $(printf '%q' "$LOG_DIR/$name.log")" || true
 }
 
@@ -432,8 +435,8 @@ stop_one() {
     log INFO "[$name] stoppe (2x C-c, dann kill falls nötig)"
     # Claude Code braucht zwei C-c IM SELBEN kurzen Zeitfenster zum Beenden:
     # der erste zeigt nur "Press Ctrl-C again to exit" und setzt sich bei
-    # zu grossem Abstand zurueck. Live verifiziert (tmux 3.4, 2026-09-24):
-    # 0.3s Abstand reicht sicher, >1.5s Abstand reicht NICHT. B3.
+    # zu großem Abstand zurück. Verifiziert (tmux 3.4):
+    # 0.3s Abstand reicht sicher, >1.5s Abstand reicht NICHT.
     tmux_ send-keys -t "$name" C-c || true
     sleep 0.3
     tmux_ send-keys -t "$name" C-c || true
@@ -450,7 +453,7 @@ status_one() {
     printf '  [%-8s] [%-8s] %-20s %s%s\n' "$status" "$running" "$name" "$workdir" "$(backoff_note "$name" "$running")"
 }
 
-# Haengt bei wiederholt fehlschlagenden Sessions einen Hinweis an (siehe
+# Hängt bei wiederholt fehlschlagenden Sessions einen Hinweis an (siehe
 # start_one/backoff_*), sonst leer.
 backoff_note() {
     local name="$1" running="$2"
@@ -462,14 +465,14 @@ backoff_note() {
 }
 
 # Schreibt einen lesbaren Klartext-Schnappschuss des aktuellen Pane-Inhalts
-# nach "$LOG_DIR/<name>.snapshot.txt" (ueberschrieben, kein Anhaengen).
-# Ergaenzt die vollstaendige, aber ANSI-verseuchte pipe-pane-Mitschrift in
-# "<name>.log" um eine schnell lesbare Momentaufnahme fuer Menschen - ersetzt
-# sie bewusst NICHT: periodische Snapshots koennten Ausgaben zwischen zwei
-# Intervallen verpassen (Scrollback-Limit), was fuer Fehlerdiagnose (z.B.
-# B1-Backoff: "warum scheitert die Session wiederholt?") die falsche Wahl
-# waere. Wird vom Supervisor-Loop alle SUPERVISE_INTERVAL Sekunden fuer
-# jede laufende Session aufgerufen. Robustheits-Review 2026-09-24, O1.
+# nach "$LOG_DIR/<name>.snapshot.txt" (überschrieben, kein Anhängen).
+# Ergänzt die vollständige, aber ANSI-verseuchte pipe-pane-Mitschrift in
+# "<name>.log" um eine schnell lesbare Momentaufnahme für Menschen - ersetzt
+# sie bewusst NICHT: periodische Snapshots könnten Ausgaben zwischen zwei
+# Intervallen verpassen (Scrollback-Limit), was für Fehlerdiagnose (z.B.
+# Backoff: "warum scheitert die Session wiederholt?") die falsche Wahl
+# wäre. Wird vom Supervisor-Loop alle SUPERVISE_INTERVAL Sekunden für
+# jede laufende Session aufgerufen.
 snapshot_one() {
     local name="$1"
     session_exists "$name" || return 0
@@ -480,10 +483,10 @@ cmd_start_all() { each_session start_one; }
 
 # Stoppt alle Sessions PARALLEL (SIGINT an alle gleichzeitig, dann ein
 # gemeinsames, zeitlich begrenztes Warten) statt seriell mit "sleep 2" pro
-# Session wie stop_one — bei vielen Sessions sonst zu langsam fuer
+# Session wie stop_one — bei vielen Sessions sonst zu langsam für
 # TimeoutStopSec der systemd-Unit, und der einzige Stop-Pfad (siehe
 # cmd_supervise-Trap, ExecStop wurde bewusst aus der Unit entfernt) muss
-# in jedem Fall darunter bleiben. Robustheits-Review 2026-09-24, B2.
+# in jedem Fall darunter bleiben.
 cmd_stop_all() {
     load_sessions
     local i names=()
@@ -496,9 +499,9 @@ cmd_stop_all() {
     done
     (( ${#names[@]} == 0 )) && return 0
 
-    # Zweites C-c fuer alle im selben kurzen Zeitfenster (siehe stop_one,
-    # B3) - EIN gemeinsames sleep statt pro Session, damit alle innerhalb
-    # des ~1s-Fensters bleiben, das Claude Code fuer den zweiten Ctrl-C
+    # Zweites C-c für alle im selben kurzen Zeitfenster (siehe stop_one) -
+    # EIN gemeinsames sleep statt pro Session, damit alle innerhalb
+    # des ~1s-Fensters bleiben, das Claude Code für den zweiten Ctrl-C
     # erwartet.
     sleep 0.3
     local name
@@ -528,12 +531,12 @@ cmd_stop_all() {
 cmd_status_all() { echo "Claude CLI Sessions ($TMUX_SOCK):"; each_session status_one; }
 cmd_restart_all() { cmd_stop_all; sleep 1; cmd_start_all; }
 
-# Maschinenlesbare Variante von "status" fuer Monitoring (z.B. Home-
+# Maschinenlesbare Variante von "status" für Monitoring (z.B. Home-
 # Assistant Command-Line-Sensor). fail_count/last_attempt_epoch sind die
-# vom Backoff getrackten Werte (siehe backoff_*) - "fail_count" zaehlt
+# vom Backoff getrackten Werte (siehe backoff_*) - "fail_count" zählt
 # Fehlversuche IN FOLGE seit dem letzten Erfolg, nicht die Lifetime-Anzahl
-# an Neustarts, um hier keine Zahl vorzutaeuschen, die tatsaechlich nicht
-# getrackt wird. Feature-Vorschlag 2026-09-24, F1.
+# an Neustarts, um hier keine Zahl vorzutäuschen, die tatsächlich nicht
+# getrackt wird.
 cmd_status_json() {
     load_sessions
     local i name status running fail_count last_attempt
@@ -568,7 +571,7 @@ print(json.dumps(out, indent=2))
 }
 
 # Nummerierte Übersicht aller konfigurierten Sessions (auch archivierte),
-# als Basis für "controller.sh archive/unarchive <nummer>".
+# als Basis für "controller.sh archive/unarchive <nr>".
 cmd_list() {
     require_config
     load_sessions
@@ -584,14 +587,14 @@ cmd_list() {
 # Legt ein neues Projekt an: Verzeichnis erstellen, in sessions.conf
 # eintragen und sofort starten.
 cmd_new() {
-    local name="${1:?Usage: controller.sh new <name> [workdir] [resume] [extra_args]}"
+    local name="${1:?Aufruf: controller.sh new <name> [workdir] [resume] [extra_args]}"
     local workdir="${2:-$PROJECTS_BASE_DIR/$name}"
     local resume="${3-last}"
     local extra="${4:-}"
 
     ensure_config
     if ! valid_name "$name"; then
-        log ERROR "[$name] ungueltiger Session-Name (nur Buchstaben/Ziffern/Leerzeichen/-/_ erlaubt, max. 64 Zeichen)"
+        log ERROR "[$name] ungültiger Session-Name (nur Buchstaben/Ziffern/Leerzeichen/-/_ erlaubt, max. 64 Zeichen)"
         exit 1
     fi
     valid_field workdir "$workdir" && valid_field resume "$resume" && valid_field extra_args "$extra" || exit 1
@@ -603,7 +606,7 @@ cmd_new() {
     # Nur neu angelegte Verzeichnisse automatisch trusten (siehe
     # trust_project_dir) — ein bereits vorhandenes Verzeichnis (z.B. ein
     # fremdes Repo als explizites $workdir) soll den Trust-Dialog nicht
-    # stillschweigend umgehen. Security-Review 2026-09-24 (S2).
+    # stillschweigend umgehen.
     local created_workdir=0
     [[ -e "$workdir" ]] || created_workdir=1
     mkdir -p "$workdir"
@@ -615,7 +618,7 @@ cmd_new() {
     if (( created_workdir )); then
         trust_project_dir "$workdir"
     else
-        log WARN "[$name] Verzeichnis existierte bereits, Auto-Trust uebersprungen — Trust-Dialog ggf. manuell in 'controller.sh attach $name' bestaetigen"
+        log WARN "[$name] Verzeichnis existierte bereits, Auto-Trust übersprungen — Trust-Dialog ggf. manuell in 'controller.sh attach $name' bestätigen"
     fi
     # Erststart: "$workdir" wurde soeben angelegt, es gibt also garantiert
     # noch keine Konversation. "claude --continue" bricht in diesem Fall
@@ -628,7 +631,7 @@ cmd_new() {
 # Stoppt eine Session und markiert sie als archiviert, sodass start/supervise
 # sie künftig überspringen (Eintrag bleibt zur Historie erhalten).
 cmd_archive() {
-    local target="${1:?Usage: controller.sh archive <nummer|name> (siehe: controller.sh list)}"
+    local target="${1:?Aufruf: controller.sh archive <nr|name> (siehe: controller.sh list)}"
     local name; name="$(resolve_target "$target")"
     session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
     stop_one "$name"
@@ -638,7 +641,7 @@ cmd_archive() {
 
 # Macht eine archivierte Session wieder startbar (startet sie nicht automatisch).
 cmd_unarchive() {
-    local target="${1:?Usage: controller.sh unarchive <nummer|name> (siehe: controller.sh list)}"
+    local target="${1:?Aufruf: controller.sh unarchive <nr|name> (siehe: controller.sh list)}"
     local name; name="$(resolve_target "$target")"
     session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
     config_set_status "$name" "active"
@@ -651,7 +654,7 @@ cmd_unarchive() {
 # erhalten (nur der Controller-Eintrag verschwindet) - erst mit
 # --purge-workdir wird es zusätzlich unwiderruflich gelöscht.
 cmd_delete() {
-    local usage="Usage: controller.sh delete <nummer|name> [--purge-workdir [--force]]"
+    local usage="Aufruf: controller.sh delete <nr|name> [--purge-workdir [--force]]"
     local target="${1:?$usage}"
     shift
     local purge="" force=""
@@ -680,19 +683,18 @@ cmd_delete() {
     if [[ "$purge" == "--purge-workdir" ]]; then
         # Leitplanken gegen einen Tippfehler in sessions.conf's workdir-Feld
         # (z.B. workdir=/home/user statt .../home/user/x), der sonst
-        # unwiderruflich per "rm -rf" ausgefuehrt wuerde. Security-Review
-        # 2026-09-24, S5.
+        # unwiderruflich per "rm -rf" ausgeführt würde.
         local real_workdir=""
         [[ -n "$workdir" ]] && real_workdir="$(realpath -- "$workdir" 2>/dev/null || true)"
         if [[ -z "$real_workdir" || ! -d "$real_workdir" ]]; then
-            log WARN "[$name] Workdir existiert nicht (mehr), nichts zu loeschen: ${workdir:-<leer>}"
+            log WARN "[$name] Workdir existiert nicht (mehr), nichts zu löschen: ${workdir:-<leer>}"
         elif [[ "$real_workdir" == "/" || "$real_workdir" == "$HOME" ]]; then
-            log ERROR "[$name] '$real_workdir' sieht nach einem kritischen Systempfad aus - Loeschen abgelehnt (auch mit --force)."
+            log ERROR "[$name] '$real_workdir' sieht nach einem kritischen Systempfad aus - Löschen abgelehnt (auch mit --force)."
             exit 1
         else
             local real_base; real_base="$(realpath -- "$PROJECTS_BASE_DIR" 2>/dev/null || echo "$PROJECTS_BASE_DIR")"
             if [[ "$real_workdir" != "$real_base"/* && "$force" != "--force" ]]; then
-                log ERROR "[$name] '$real_workdir' liegt ausserhalb von PROJECTS_BASE_DIR ('$real_base') - zur Sicherheit abgelehnt. Zum Erzwingen: controller.sh delete $target --purge-workdir --force"
+                log ERROR "[$name] '$real_workdir' liegt außerhalb von PROJECTS_BASE_DIR ('$real_base') - zur Sicherheit abgelehnt. Zum Erzwingen: controller.sh delete $target --purge-workdir --force"
                 exit 1
             fi
             rm -rf -- "$real_workdir"
@@ -704,28 +706,28 @@ cmd_delete() {
 }
 
 # Benennt eine Session um: Config-Eintrag, laufende tmux-Session (falls
-# aktiv) und die Log-/Snapshot-Dateien. Feature-Vorschlag 2026-09-24, F8.
+# aktiv) und die Log-/Snapshot-Dateien.
 cmd_rename() {
-    local target="${1:?Usage: controller.sh rename <nr|name> <neuer-name>}"
-    local new_name="${2:?Usage: controller.sh rename <nr|name> <neuer-name>}"
+    local target="${1:?Aufruf: controller.sh rename <nr|name> <neuer-name>}"
+    local new_name="${2:?Aufruf: controller.sh rename <nr|name> <neuer-name>}"
     local name; name="$(resolve_target "$target")"
     session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
     if ! valid_name "$new_name"; then
-        log ERROR "[$new_name] ungueltiger Session-Name (nur Buchstaben/Ziffern/Leerzeichen/-/_, mind. 1 Buchstabe, max. 64 Zeichen)"
+        log ERROR "[$new_name] ungültiger Session-Name (nur Buchstaben/Ziffern/Leerzeichen/-/_, mind. 1 Buchstabe, max. 64 Zeichen)"
         exit 1
     fi
     if [[ "$new_name" == "$name" ]]; then
-        log INFO "[$name] Name unveraendert"
+        log INFO "[$name] Name unverändert"
         return 0
     fi
     session_defined "$new_name" && { log ERROR "[$new_name] existiert bereits in $CONFIG_FILE"; exit 1; }
 
     if session_exists "$name"; then
         # Laufenden Log-Pipe erst sauber schliessen (ohne "-o": schliesst
-        # bestehenden Pipe statt einen zweiten zu oeffnen), sonst wuerde die
+        # bestehenden Pipe statt einen zweiten zu öffnen), sonst würde die
         # laufende "cat"-Instanz stur weiter unter dem ALTEN Dateinamen
-        # schreiben (offener Dateideskriptor ueberlebt auch das "mv" unten,
-        # aber ohne Pfad waere der Inhalt danach nicht mehr auffindbar).
+        # schreiben (offener Dateideskriptor überlebt auch das "mv" unten,
+        # aber ohne Pfad wäre der Inhalt danach nicht mehr auffindbar).
         tmux_ pipe-pane -t "$name" || true
         tmux_ rename-session -t "$name" "$new_name"
     fi
@@ -741,13 +743,12 @@ cmd_rename() {
     fi
 }
 
-# Aendert workdir/resume/extra_args einer bestehenden Session gezielt,
+# Ändert workdir/resume/extra_args einer bestehenden Session gezielt,
 # ohne die restliche Zeile in sessions.conf anzufassen. Wirkt erst beim
-# naechsten Start dieser Session (analog zu "unarchive": kein impliziter
-# Neustart, um eine laufende Session nicht ueberraschend zu beenden).
-# Feature-Vorschlag 2026-09-24, F8.
+# nächsten Start dieser Session (analog zu "unarchive": kein impliziter
+# Neustart, um eine laufende Session nicht überraschend zu beenden).
 cmd_edit() {
-    local target="${1:?Usage: controller.sh edit <nr|name> [--workdir <pfad>] [--resume <last|continue|id|''>] [--extra-args <flags>]}"
+    local target="${1:?Aufruf: controller.sh edit <nr|name> [--workdir <pfad>] [--resume <last|continue|id|''>] [--extra-args <flags>]}"
     shift
     local name; name="$(resolve_target "$target")"
     session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
@@ -762,16 +763,16 @@ cmd_edit() {
         esac
     done
     if (( ! set_workdir && ! set_resume && ! set_extra )); then
-        log ERROR "Nichts zu aendern angegeben (siehe: controller.sh edit <nr|name> --workdir/--resume/--extra-args <wert>)"
+        log ERROR "Nichts zu ändern angegeben (siehe: controller.sh edit <nr|name> --workdir/--resume/--extra-args <wert>)"
         exit 1
     fi
     valid_field workdir "$new_workdir" && valid_field resume "$new_resume" && valid_field extra_args "$new_extra" || exit 1
     config_edit_entry "$name" "$set_workdir" "$new_workdir" "$set_resume" "$new_resume" "$set_extra" "$new_extra"
-    log INFO "[$name] Config aktualisiert (wirkt erst beim naechsten Start dieser Session)"
+    log INFO "[$name] Config aktualisiert (wirkt erst beim nächsten Start dieser Session)"
 }
 
 cmd_attach() {
-    local target="${1:?Usage: controller.sh attach <nummer|name>}"
+    local target="${1:?Aufruf: controller.sh attach <nr|name>}"
     local name; name="$(resolve_target "$target")"
     session_exists "$name" || { log ERROR "[$name] läuft nicht"; exit 1; }
     exec tmux -S "$TMUX_SOCK" attach -t "$name"
@@ -779,8 +780,8 @@ cmd_attach() {
 
 cmd_supervise() {
     log INFO "Supervisor gestartet (Intervall: ${SUPERVISE_INTERVAL}s)"
-    # Trap VOR dem ersten Start setzen, damit auch ein TERM/INT waehrend
-    # des (bei vielen Sessions laenger dauernden) Starts sauber stoppt.
+    # Trap VOR dem ersten Start setzen, damit auch ein TERM/INT während
+    # des (bei vielen Sessions länger dauernden) Starts sauber stoppt.
     trap 'log INFO "Supervisor beendet, stoppe Sessions"; cmd_stop_all; exit 0' TERM INT
     cmd_start_all
     while true; do
@@ -788,7 +789,7 @@ cmd_supervise() {
         # Sekunden (Signal wird erst NACH dem Ende des Foreground-Kommandos
         # behandelt) — "sleep X & wait $!" reagiert dagegen sofort auf
         # TERM/INT, da wait beim Signal unterbrochen wird. Empirisch
-        # bestaetigt (Robustheits-Review 2026-09-24, B2).
+        # bestätigt.
         sleep "$SUPERVISE_INTERVAL" & wait $!
         # sessions.conf pro Tick neu einlesen, sonst arbeitet der Supervisor
         # dauerhaft mit dem Stand vom Start (archive/new/unarchive wirkten nicht).
@@ -799,8 +800,8 @@ cmd_supervise() {
 }
 
 # Sichert sessions.conf, ~/.claude.json und ~/.claude/ (Session-Transkripte,
-# Settings, Trust-Zustand) als tar.gz - fuer eine schnelle Wiederherstellung
-# nach einem Container-Neuaufbau. Feature-Vorschlag 2026-09-24, F9.
+# Settings, Trust-Zustand) als tar.gz - für eine schnelle Wiederherstellung
+# nach einem Container-Neuaufbau.
 cmd_backup() {
     local dest="${1:-$STATE_DIR/backups/claude-backup-$(date +%Y%m%d-%H%M%S).tar.gz}"
     mkdir -p "$(dirname "$dest")"
@@ -817,17 +818,17 @@ cmd_backup() {
     log INFO "Backup geschrieben: $dest ($(du -h "$dest" 2>/dev/null | cut -f1))"
 }
 
-# Gegenstueck zu "backup": stellt sessions.conf, ~/.claude.json und
+# Gegenstück zu "backup": stellt sessions.conf, ~/.claude.json und
 # ~/.claude/ aus einer zuvor erstellten tar.gz wieder her. Ueberschreibt
 # den aktuellen Stand - analog zum --force-Muster von "delete
 # --purge-workdir" bewusst nicht interaktiv, sondern per explizitem Flag,
 # damit es scriptbar bleibt und zum Rest des Tools passt.
 cmd_restore() {
-    local archive="${1:?Usage: controller.sh restore <backup-datei.tar.gz> --force}"
+    local archive="${1:?Aufruf: controller.sh restore <backup-datei.tar.gz> --force}"
     local force="${2:-}"
     [[ -f "$archive" ]] || { log ERROR "Backup-Datei nicht gefunden: $archive"; exit 1; }
     if [[ "$force" != "--force" ]]; then
-        log ERROR "Restore ueberschreibt $CONFIG_FILE, $CLAUDE_JSON und $HOME/.claude - zur Sicherheit ist --force noetig: controller.sh restore $archive --force"
+        log ERROR "Restore überschreibt $CONFIG_FILE, $CLAUDE_JSON und $HOME/.claude - zur Sicherheit ist --force nötig: controller.sh restore $archive --force"
         log ERROR "Laufende Sessions vorher stoppen (controller.sh stop), sonst evtl. inkonsistenter Zustand."
         exit 1
     fi
@@ -837,7 +838,7 @@ cmd_restore() {
 
 usage() {
     cat <<EOF
-Usage: $0 <command> [args]
+Aufruf: $0 <befehl> [argumente]
 
 Sessions verwalten:
   start                  Alle aktiven Sessions starten (idempotent, überspringt archivierte)
