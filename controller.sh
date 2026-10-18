@@ -752,7 +752,7 @@ cmd_rename() {
     fi
 }
 
-# Aendert workdir/resume/extra_args einer bestehenden Session gezielt,
+# Ändert workdir/resume/extra_args einer bestehenden Session gezielt,
 # ohne die restliche Zeile in sessions.conf anzufassen. Wirkt erst beim
 # nächsten Start dieser Session (analog zu "unarchive": kein impliziter
 # Neustart, um eine laufende Session nicht überraschend zu beenden).
