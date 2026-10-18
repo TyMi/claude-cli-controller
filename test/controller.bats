@@ -359,6 +359,50 @@ EOF
     [ "$(cat "$CLAUDE_CTRL_CONFIG")" = "$(printf '# Kommentar\naa;%s;;;active\n\nb;%s;last;;archived' "$TESTDIR/projects/a" "$TESTDIR/projects/b")" ]
 }
 
+# --- trust ---
+
+@test "trust marks an existing workdir as trusted, even with AUTO_TRUST=0" {
+    export CLAUDE_CTRL_CLAUDE_JSON="$TESTDIR/claude.json"
+    echo '{"projects": {}}' > "$CLAUDE_CTRL_CLAUDE_JSON"
+    chmod 600 "$CLAUDE_CTRL_CLAUDE_JSON"
+    mkdir -p "$TESTDIR/existing"
+    echo "demo;$TESTDIR/existing;;;active" > "$CLAUDE_CTRL_CONFIG"
+    run "$CTL" trust 1
+    [ "$status" -eq 0 ]
+    run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['projects'][sys.argv[2]]['hasTrustDialogAccepted'])" "$CLAUDE_CTRL_CLAUDE_JSON" "$(realpath "$TESTDIR/existing")"
+    [ "$output" = "True" ]
+    [ "$(stat -c %a "$CLAUDE_CTRL_CLAUDE_JSON")" = "600" ]
+}
+
+@test "trust fails for an unknown session" {
+    export CLAUDE_CTRL_CLAUDE_JSON="$TESTDIR/claude.json"
+    echo '{}' > "$CLAUDE_CTRL_CLAUDE_JSON"
+    echo "demo;$TESTDIR/projects;;;active" > "$CLAUDE_CTRL_CONFIG"
+    run "$CTL" trust nope
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nicht in"* ]]
+}
+
+@test "trust fails when the workdir is missing or empty" {
+    export CLAUDE_CTRL_CLAUDE_JSON="$TESTDIR/claude.json"
+    echo '{}' > "$CLAUDE_CTRL_CLAUDE_JSON"
+    printf 'gone;%s/missing;;;active\nnowd;;;;active\n' "$TESTDIR" > "$CLAUDE_CTRL_CONFIG"
+    run "$CTL" trust 1
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Arbeitsverzeichnis fehlt"* ]]
+    run "$CTL" trust 2
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"kein workdir"* ]]
+}
+
+@test "trust fails when claude.json does not exist" {
+    export CLAUDE_CTRL_CLAUDE_JSON="$TESTDIR/does-not-exist.json"
+    echo "demo;$TESTDIR/projects;;;active" > "$CLAUDE_CTRL_CONFIG"
+    run "$CTL" trust 1
+    [ "$status" -ne 0 ]
+    [ ! -e "$CLAUDE_CTRL_CLAUDE_JSON" ]
+}
+
 # --- backup/restore ---
 
 # HOME wird hier bewusst auf ein Fake-Verzeichnis isoliert - sonst würde

@@ -298,24 +298,17 @@ config_remove_entry() { config_rewrite "$1" remove; }
 # Benennt die Session $1 zu $2 um. Für "rename".
 config_rename_entry() { config_rewrite "$1" rename "$2"; }
 
-# Aendert gezielt workdir/resume/extra_args der Session $1, je nachdem
+# Ändert gezielt workdir/resume/extra_args der Session $1, je nachdem
 # welches der set_*-Flags (0/1) gesetzt ist. Für "edit".
 config_edit_entry() { config_rewrite "$1" edit "$2" "$3" "$4" "$5" "$6" "$7"; }
 
-# Markiert $1 in ~/.claude.json als vertrauenswürdig (hasTrustDialogAccepted),
-# damit "claude" beim ersten Start in einer unbeaufsichtigten tmux-Session
-# nicht auf die interaktive Trust-Abfrage wartet. Nur für Projekte gedacht,
-# die über "controller.sh new" selbst angelegt wurden. Abschaltbar über
-# CLAUDE_CTRL_AUTO_TRUST=0.
-trust_project_dir() {
+# Schreibt hasTrustDialogAccepted=true für das Verzeichnis $1 in
+# ~/.claude.json (Rückgabe 0 bei Erfolg). Dateirechte der Datei bleiben
+# erhalten (sie enthält Konto-Informationen, typischerweise Modus 600).
+write_trust() {
     local dir="$1"
-    [[ "$AUTO_TRUST" == "1" ]] || return 0
-    if [[ ! -f "$CLAUDE_JSON" ]]; then
-        log WARN "$CLAUDE_JSON nicht gefunden, überspringe Auto-Trust für $dir"
-        return 0
-    fi
-    if ! CLAUDE_CTRL_TRUST_DIR="$dir" CLAUDE_CTRL_TRUST_FILE="$CLAUDE_JSON" python3 <<'PYEOF'
-import json, os, sys
+    CLAUDE_CTRL_TRUST_DIR="$dir" CLAUDE_CTRL_TRUST_FILE="$CLAUDE_JSON" python3 <<'PYEOF'
+import json, os, shutil
 
 path = os.environ["CLAUDE_CTRL_TRUST_FILE"]
 target = os.environ["CLAUDE_CTRL_TRUST_DIR"]
@@ -332,9 +325,25 @@ tmp = path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
+shutil.copymode(path, tmp)
 os.replace(tmp, path)
 PYEOF
-    then
+}
+
+# Markiert $1 in ~/.claude.json als vertrauenswürdig, damit "claude" beim
+# ersten Start in einer unbeaufsichtigten tmux-Session nicht auf die
+# interaktive Trust-Abfrage wartet. Automatisch nur für Projekte, die über
+# "controller.sh new" selbst angelegt wurden (abschaltbar über
+# CLAUDE_CTRL_AUTO_TRUST=0); für bestehende Verzeichnisse gibt es den
+# expliziten Befehl "controller.sh trust".
+trust_project_dir() {
+    local dir="$1"
+    [[ "$AUTO_TRUST" == "1" ]] || return 0
+    if [[ ! -f "$CLAUDE_JSON" ]]; then
+        log WARN "$CLAUDE_JSON nicht gefunden, überspringe Auto-Trust für $dir"
+        return 0
+    fi
+    if ! write_trust "$dir"; then
         log WARN "[$dir] konnte nicht automatisch als vertrauenswürdig markiert werden"
         return 0
     fi
@@ -771,6 +780,37 @@ cmd_edit() {
     log INFO "[$name] Config aktualisiert (wirkt erst beim nächsten Start dieser Session)"
 }
 
+# Markiert das Arbeitsverzeichnis einer bestehenden Session ausdrücklich als
+# vertrauenswürdig (Ersatz für das manuelle Python-Snippet aus
+# docs/TROUBLESHOOTING.md). Anders als der Auto-Trust von "new" gilt das für
+# beliebige, vom Nutzer benannte Verzeichnisse - daher nur auf expliziten
+# Befehl und unabhängig von CLAUDE_CTRL_AUTO_TRUST. Wirkt auf eine bereits am
+# Trust-Dialog hängende Session erst nach deren Neustart.
+cmd_trust() {
+    local target="${1:?Aufruf: controller.sh trust <nr|name>}"
+    local name; name="$(resolve_target "$target")"
+    session_defined "$name" || { log ERROR "[$name] nicht in $CONFIG_FILE gefunden"; exit 1; }
+    local workdir; workdir="$(config_get_workdir "$name")"
+    if [[ -z "$workdir" ]]; then
+        log ERROR "[$name] hat kein workdir in $CONFIG_FILE (Standard wäre \$HOME) - bitte erst setzen: controller.sh edit $target --workdir <pfad>"
+        exit 1
+    fi
+    if [[ ! -d "$workdir" ]]; then
+        log ERROR "[$name] Arbeitsverzeichnis fehlt: $workdir"
+        exit 1
+    fi
+    if [[ ! -f "$CLAUDE_JSON" ]]; then
+        log ERROR "$CLAUDE_JSON nicht gefunden - 'claude' einmal als dieser User starten/einloggen"
+        exit 1
+    fi
+    local real_workdir; real_workdir="$(realpath -- "$workdir")"
+    write_trust "$real_workdir" || { log ERROR "[$name] konnte $real_workdir nicht in $CLAUDE_JSON eintragen"; exit 1; }
+    log INFO "[$name] $real_workdir als vertrauenswürdig markiert (hasTrustDialogAccepted=true)"
+    if session_exists "$name"; then
+        log INFO "[$name] läuft bereits - Änderung greift erst nach einem Neustart dieser Session"
+    fi
+}
+
 cmd_attach() {
     local target="${1:?Aufruf: controller.sh attach <nr|name>}"
     local name; name="$(resolve_target "$target")"
@@ -860,6 +900,8 @@ Projekte verwalten:
   edit <nr|name> [--workdir <pfad>] [--resume <wert>] [--extra-args <flags>]
                          Workdir/Resume/Extra-Args gezielt ändern, wirkt erst beim
                          nächsten Start dieser Session
+  trust <nr|name>        Workdir der Session in ~/.claude.json als vertrauenswürdig markieren
+                         (für bestehende Verzeichnisse; "new" macht das für neue selbst)
   delete <nr|name> [--purge-workdir [--force]]
                          Session stoppen und Eintrag komplett aus sessions.conf
                          entfernen (nicht nur archivieren). Arbeitsverzeichnis
@@ -902,6 +944,7 @@ main() {
         unarchive)  cmd_unarchive "${1:-}" ;;
         rename)     cmd_rename "${1:-}" "${2:-}" ;;
         edit)       cmd_edit "$@" ;;
+        trust)      cmd_trust "${1:-}" ;;
         delete)     cmd_delete "$@" ;;
         backup)     cmd_backup "${1:-}" ;;
         restore)    cmd_restore "${1:-}" "${2:-}" ;;
